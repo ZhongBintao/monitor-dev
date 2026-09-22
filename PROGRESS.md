@@ -109,6 +109,7 @@ monitor-dev/
 | M14 | 09-22 20:5x | 虚拟键盘对齐参考图（半高方向键 / Unicode 字形 / 键帽样式逐键定义）+ git 仓库建立 |
 | M15 | 09-22 22:0x | 物理布局对齐 apple-wireless-keyboard.json（功能行 1.0357u / command 1.25u / space 5u；高度归一 1.0；图标沿用现有 UI）；新增 JSON 等价性测试（43 用例） |
 | M16 | 09-22 22:2x | 键帽圆角缩小（0.14u→0.09u）；方向键底对齐断言固化（KLE 原始文件方向键向下突出 0.111u 系其风格化 hack，应用已修正为底对齐） |
+| M17 | 09-22 23:0x | 右侧 command/option 图标与单词右对齐（.iconWordTrailing）；fn 地球左下 + fn 右下（.iconWordCorners）；键盘画布四周 0.1u 外边距（canvasAspectRatio 供调用方） |
 | M7 | — | **待实施**：触控板增强（见 TOUCHPAD_PROPOSAL.md） |
 
 ## 八、已知边界与风险
