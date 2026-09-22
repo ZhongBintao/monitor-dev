@@ -43,6 +43,8 @@
 
 ## 5. 键盘设计规范
 
+> 📌 **实现修订（2026-09-22）**：物理布局以 `apple-wireless-keyboard.json`（Apple Wireless Keyboard 实测，KLE 格式）为准——功能行 14 键 1.0357u、command 1.25u、space 5u；四方向键均为半高（↑ 顶对齐、←/↓/→ 底对齐）；右 Shift/右 command/右 option 图标与文字右对齐；fn 为地球左下 + 字母右下；修饰键图标用标准 Unicode 字符（⌘⌥⇧⌃⇪⌫⏎⇥），F1–F12 用 SF Symbols 描边图标；数字/标点双层标注居中。与下文原始描述不一致处以实现为准（几何等价性由测试守护，详见 PROGRESS.md）。
+
 键盘视觉保留现有效果图的浅色圆角方格化美术表现，不模拟金属机身或真实键帽材质；但格位、相对键宽、分行、键帽文字、符号、功能图标及其锚点必须严格匹配 Apple 14 / 16 英寸 MacBook Pro 的 US ANSI 键盘。
 
 本轮效果图的唯一基准为带 Touch ID、全高功能行的 78 键 US ANSI MacBook Pro 键盘：
