@@ -1,0 +1,8 @@
+# SwiftPM 构建产物
+.build/
+# 应用包（可由 build-release.sh 重建）
+build/
+# 工作区数据
+.workbuddy/
+# 系统文件
+.DS_Store
