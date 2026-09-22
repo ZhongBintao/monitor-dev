@@ -241,7 +241,7 @@ struct OverviewView: View {
     private func topKeyName(_ id: String) -> String {
         guard let key = KeyboardLayoutSpec.key(withID: id) else { return id }
         if let base = key.baseLabel { return base }
-        if let caption = key.caption { return caption }
+        if let word = key.word { return word.localizedCapitalized }
         return id
     }
 }
@@ -451,7 +451,7 @@ struct KeyboardDistributionView: View {
     private func keyName(_ id: String) -> String {
         guard let key = KeyboardLayoutSpec.key(withID: id) else { return id }
         if let base = key.baseLabel { return base }
-        if let caption = key.caption { return caption }
+        if let word = key.word { return word.localizedCapitalized }
         return id
     }
 }

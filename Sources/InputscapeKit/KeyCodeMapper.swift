@@ -145,7 +145,7 @@ public enum ComboKeyBuilder {
     public static func keyLabel(for keyID: String) -> String {
         guard let key = KeyboardLayoutSpec.key(withID: keyID) else { return keyID }
         if let base = key.baseLabel { return base }
-        if let caption = key.caption { return caption.localizedCapitalized }
+        if let word = key.word { return word.localizedCapitalized }
         return keyID
     }
 }

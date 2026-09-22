@@ -88,137 +88,179 @@ struct KeyboardHeatmapView: View {
             ? .white
             : (heatOn && count > 0 ? Theme.heatTextColor(intensity) : (key.isObservable ? Theme.navy : Theme.secondary))
 
-        let shape = RoundedRectangle(cornerRadius: unit * 0.16, style: .continuous)
-
-        Group {
+        if key.style == .touchID {
+            // Touch ID：裸圆环（参考图样式，无键帽边框），不可观察无热力
             ZStack {
-                shape.fill(fill)
-                shape.stroke(isSelected || isPressed ? Theme.keyPurple : Theme.hairline,
-                             lineWidth: isSelected ? 2.2 : (isPressed ? 1.4 : 1))
-                keycapContent(for: key, unit: unit, color: contentColor)
-                    .padding(unit * 0.10)
-                if key.homeIndicator {
-                    Capsule()
-                        .fill(contentColor.opacity(0.55))
-                        .frame(width: unit * 0.14, height: unit * 0.05)
-                        .offset(y: unit * 0.36)
+                Circle()
+                    .stroke(isPressed ? Theme.keyPurple : Theme.hairline,
+                            lineWidth: isPressed ? 1.6 : 1)
+                Circle()
+                    .fill(isPressed ? Theme.keyPurple.opacity(0.4) : Theme.keyPurpleSoft.opacity(0.8))
+                    .frame(width: unit * 0.42, height: unit * 0.42)
+            }
+            .onTapGesture { selectedKeyID = key.id }
+            .accessibilityLabel(Text("Touch ID"))
+            .accessibilityHint(Text("不产生可观察事件"))
+        } else {
+            let shape = RoundedRectangle(cornerRadius: unit * 0.14, style: .continuous)
+            Group {
+                ZStack {
+                    shape.fill(fill)
+                    shape.stroke(isSelected || isPressed ? Theme.keyPurple : Theme.hairline,
+                                 lineWidth: isSelected ? 2.2 : (isPressed ? 1.4 : 1))
+                    keycapContent(for: key, unit: unit, color: contentColor)
+                        .padding(unit * 0.10)
+                    if key.homeIndicator {
+                        Capsule()
+                            .fill(contentColor.opacity(0.55))
+                            .frame(width: unit * 0.14, height: unit * 0.05)
+                            .offset(y: unit * 0.36)
+                    }
+                    if key.ledIndicator {
+                        // caps lock LED 指示点（参考图：键帽左上角小圆点）
+                        Circle()
+                            .fill(contentColor.opacity(0.45))
+                            .frame(width: unit * 0.08, height: unit * 0.08)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: .topLeading)
+                            .padding(.leading, unit * 0.14)
+                            .padding(.top, unit * 0.10)
+                    }
                 }
             }
+            // 跟手反馈：按下瞬间点亮缩放、松开立即消失；减少动效时禁用。
+            .scaleEffect(isPressed && !reduceMotion ? 0.90 : 1)
+            .animation(reduceMotion ? nil : .linear(duration: 0.04), value: isPressed)
+            .animation(reduceMotion ? nil : .linear(duration: 0.08), value: highlightKeyID)
+            .onTapGesture { selectedKeyID = key.id }
+            .accessibilityLabel(Text(accessibilityName(for: key)))
+            .accessibilityValue(Text(count > 0 ? "\(count) 次" : "无数据"))
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
         }
-        // 跟手反馈：按下瞬间点亮缩放、松开立即消失；减少动效时禁用。
-        .scaleEffect(isPressed && !reduceMotion ? 0.90 : 1)
-        .animation(reduceMotion ? nil : .linear(duration: 0.04), value: isPressed)
-        .animation(reduceMotion ? nil : .linear(duration: 0.08), value: highlightKeyID)
-        .onTapGesture { selectedKeyID = key.id }
-        .accessibilityLabel(Text(accessibilityName(for: key)))
-        .accessibilityValue(Text(count > 0 ? "\(count) 次" : "无数据"))
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
+
+    // MARK: - 键帽内容（按 KeycapStyle 逐样式渲染）
 
     @ViewBuilder
     private func keycapContent(for key: KeyDefinition, unit: CGFloat, color: Color) -> some View {
-        let fontSize = unit * 0.30
-
-        if let icon = key.icon {
-            // 图标键：功能行 / 修饰键 / 方向键 / Touch ID
-            if let caption = key.caption, unit >= 24 {
-                VStack(spacing: unit * 0.04) {
-                    iconView(icon, size: unit * 0.30, color: color)
-                    Text(caption)
-                        .font(.system(size: unit * 0.17, weight: .medium))
+        switch key.style {
+        case .twin:
+            // 双层标注：上符号 / 下字符，居中（参考图样式）
+            if let top = key.topSymbol, let base = key.baseLabel {
+                VStack(spacing: 0) {
+                    Text(top).font(.system(size: unit * 0.21, weight: .medium))
+                    Spacer(minLength: 0)
+                    Text(base).font(.system(size: unit * 0.28, weight: .regular))
+                }
+                .foregroundColor(color)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .letter:
+            if let base = key.baseLabel {
+                Text(base)
+                    .font(.system(size: unit * 0.30, weight: .medium))
+                    .foregroundColor(color)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .fKey:
+            VStack(spacing: unit * 0.04) {
+                if let glyph = key.glyph {
+                    glyphView(glyph, size: unit * 0.28, color: color)
+                }
+                if let word = key.word {
+                    Text(word)
+                        .font(.system(size: unit * 0.165, weight: .medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
                 }
-                .foregroundColor(color)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchorAlignment(key.anchor))
-            } else if let caption = key.caption, unit < 24 {
-                // 缩略模式：仅文字
-                Text(caption)
-                    .font(.system(size: unit * 0.17, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .foregroundColor(color)
-                    .frame(maxWidth: .infinity, alignment: anchorAlignment(key.anchor))
-            } else {
-                iconView(icon, size: unit * 0.34, color: color)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        } else if let top = key.topSymbol, let base = key.baseLabel {
-            // 双层标注：上方符号、下方数字/字符（US ANSI 对应关系）
-            VStack(alignment: .leading, spacing: 0) {
-                Text(top).font(.system(size: unit * 0.22, weight: .medium))
-                Spacer(minLength: 0)
-                Text(base).font(.system(size: fontSize, weight: .regular))
             }
             .foregroundColor(color)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchorAlignment(key.anchor))
-        } else if let base = key.baseLabel {
-            Text(base)
-                .font(.system(size: fontSize, weight: .medium))
-                .foregroundColor(color)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchorAlignment(key.anchor))
-        } else if let caption = key.caption {
-            Text(caption)
-                .font(.system(size: unit * 0.19, weight: .medium))
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .foregroundColor(color)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchorAlignment(key.anchor))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .iconWordLeading:
+            // 图标上、单词下，左对齐（fn / control / option / command）
+            VStack(alignment: .leading, spacing: 0) {
+                if let glyph = key.glyph {
+                    glyphView(glyph, size: unit * 0.26, color: color)
+                }
+                Spacer(minLength: 0)
+                if let word = key.word {
+                    Text(word)
+                        .font(.system(size: unit * 0.15, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+            }
+            .padding(.leading, unit * 0.13)
+            .padding(.vertical, unit * 0.10)
+            .foregroundColor(color)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        case .iconCentered:
+            // 半高方向键：字形随半高缩小
+            if let glyph = key.glyph {
+                glyphView(glyph, size: unit * (key.height < 1 ? 0.24 : 0.32), color: color)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .iconLeadingMiddle:
+            if let glyph = key.glyph {
+                glyphView(glyph, size: unit * 0.26, color: color)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .padding(.leading, unit * 0.18)
+            }
+        case .iconTrailingMiddle:
+            if let glyph = key.glyph {
+                glyphView(glyph, size: unit * 0.26, color: color)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                    .padding(.trailing, unit * 0.18)
+            }
+        case .iconCornerLeading:
+            if let glyph = key.glyph {
+                glyphView(glyph, size: unit * 0.26, color: color)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomLeading)
+                    .padding(.leading, unit * 0.14)
+                    .padding(.bottom, unit * 0.10)
+            }
+        case .iconCornerTrailing:
+            if let glyph = key.glyph {
+                glyphView(glyph, size: unit * 0.26, color: color)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomTrailing)
+                    .padding(.trailing, unit * 0.14)
+                    .padding(.bottom, unit * 0.10)
+            }
+        case .wordLeading:
+            if let word = key.word {
+                Text(word)
+                    .font(.system(size: unit * 0.19, weight: .medium))
+                    .foregroundColor(color)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: .bottomLeading)
+                    .padding(.leading, unit * 0.14)
+                    .padding(.bottom, unit * 0.10)
+            }
+        case .touchID, .blank:
+            EmptyView()
         }
     }
 
     @ViewBuilder
-    private func iconView(_ icon: KeycapIcon, size: CGFloat, color: Color) -> some View {
-        if let name = Self.sfSymbol(for: icon) {
+    private func glyphView(_ glyph: KeyGlyph, size: CGFloat, color: Color) -> some View {
+        switch glyph {
+        case .unicode(let character):
+            Text(character)
+                .font(.system(size: size, weight: .medium))
+                .foregroundColor(color)
+        case .sfSymbol(let name):
             Image(systemName: name)
                 .font(.system(size: size, weight: .medium))
                 .foregroundColor(color)
         }
     }
 
-    private func anchorAlignment(_ anchor: KeycapAnchor, vertical: VerticalAlignment = .center) -> Alignment {
-        let horizontal: HorizontalAlignment
-        switch anchor {
-        case .leading: horizontal = .leading
-        case .center: horizontal = .center
-        case .trailing: horizontal = .trailing
-        }
-        return Alignment(horizontal: horizontal, vertical: vertical)
-    }
-
     private func accessibilityName(for key: KeyDefinition) -> String {
-        if let caption = key.caption { return caption }
+        if let word = key.word { return word }
         if let base = key.baseLabel { return base }
         if let top = key.topSymbol { return "键位 \(top)" }
         return key.id
-    }
-
-    private static func sfSymbol(for icon: KeycapIcon) -> String? {
-        switch icon {
-        case .sunLow: return "sun.min"
-        case .sunMax: return "sun.max"
-        case .missionControl: return "rectangle.split.2x2"
-        case .spotlight: return "magnifyingglass"
-        case .dictation: return "mic"
-        case .doNotDisturb: return "moon.fill"
-        case .rewind: return "backward.fill"
-        case .playPause: return "playpause.fill"
-        case .fastForward: return "forward.fill"
-        case .mute: return "speaker.slash.fill"
-        case .volumeDown: return "speaker.wave.1.fill"
-        case .volumeUp: return "speaker.wave.3.fill"
-        case .touchID: return "touchid"
-        case .globe: return "globe"
-        case .control: return "control"
-        case .option: return "option"
-        case .command: return "command"
-        case .shift: return "shift"
-        case .capsLock: return "capslock"
-        case .deleteLeft: return "delete.left"
-        case .arrowUp: return "arrowtriangle.up.fill"
-        case .arrowDown: return "arrowtriangle.down.fill"
-        case .arrowLeft: return "arrowtriangle.left.fill"
-        case .arrowRight: return "arrowtriangle.right.fill"
-        }
     }
 }
