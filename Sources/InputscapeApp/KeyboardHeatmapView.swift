@@ -204,18 +204,20 @@ struct KeyboardHeatmapView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
         case .iconWordCorners:
             // 图标左下、单词右下，底部对齐（fn）
-            HStack(alignment: .bottom, spacing: unit * 0.08) {
+            // 注意：keycap() 已有 0.10u 外层 padding，内层边距必须极小，
+            // 且单词禁止换行（否则 1u 键帽内 "fn" 会被拆成上下两层）
+            HStack(alignment: .bottom, spacing: unit * 0.05) {
                 if let glyph = key.glyph {
-                    glyphView(glyph, size: unit * 0.22, color: color)
+                    glyphView(glyph, size: unit * 0.20, color: color)
                 }
                 if let word = key.word {
                     Text(word)
                         .font(.system(size: unit * 0.15, weight: .medium))
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
-            .padding(.leading, unit * 0.12)
-            .padding(.trailing, unit * 0.10)
-            .padding(.bottom, unit * 0.10)
+            .padding(.leading, unit * 0.03)
             .foregroundColor(color)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         case .iconWordLeading:
