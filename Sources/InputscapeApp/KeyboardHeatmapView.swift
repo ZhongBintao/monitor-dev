@@ -90,7 +90,7 @@ struct KeyboardHeatmapView: View {
             if isPressed { return Theme.keyPurple }
             if isHighlighted { return Theme.keyPurple.opacity(0.75) }
             if heatOn && count > 0 { return Theme.heatColor(intensity) }
-            return Color.white
+            return Theme.keycap
         }()
         let contentColor: Color = (isPressed || isHighlighted)
             ? .white

@@ -16,7 +16,7 @@
 
 ## 二、当前状态
 
-**首版功能完成，43/43 测试通过，`build-release.sh` 一键构建/签名/启动。**
+**首版功能完成，48/48 测试通过，`build-release.sh` 一键构建/签名/启动。**
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
@@ -49,6 +49,7 @@ monitor-dev/
 │   └── Models.swift                 # DailyRecord / TimeBucket / LiveState / 快照等
 ├── Sources/InputscapeApp/           # SwiftUI 应用
 │   ├── KeyboardHeatmapView.swift    # ★ 唯一键盘渲染视图（三页共用，键帽样式渲染 + 画布外边距）
+│   ├── AppearanceManager.swift      # 夜览切换核心：NSApp.appearance 应用 + 系统深浅色监听
 │   ├── AppModel.swift               # 主模型（状态/快照/持久化；高频事件不经此失效全树）
 │   ├── LiveModel.swift              # 实时状态（pressedKeys/heldChips，按键只失效实时页）
 │   ├── AppKitTooltip.swift          # ⓘ 原生 Tooltip 桥接（NSView.toolTip）
@@ -89,6 +90,7 @@ monitor-dev/
 9. **ⓘ 提示用平台原生 `NSView.toolTip`**：悬停检测、延迟、定位、消失全由系统管理。
 10. **性能**：高频事件（每次按键）只更新 LiveModel 与引擎计数，不触发主模型 `objectWillChange`；空闲秒数用 TimelineView 局部刷新。
 11. **交付纪律**：`build-release.sh` 固化构建流程（构建退出码显式校验、失败输出日志并中止、稳定签名、重启冒烟）；构建命令禁止接管道后再链式执行（管道退出码会掩盖编译失败）。
+12. **夜览（深色）模式走 AppKit 原生外观机制**：`Theme` 全部语义色改为 `NSColor(name:dynamicProvider:)` 动态颜色（明暗两套配对值），应用侧只改 `NSApp.appearance`（开启=darkAqua / 关闭=aqua / 跟随=nil）——外观变化由系统传播到所有窗口并触发动态颜色重解析，即时生效、无需重启，也不需要逐视图订阅 colorScheme。模式选择持久化在 UserDefaults（`Inputscape.AppearanceMode`），Kit 层枚举 + 存储可测（5 个用例）；唯一非 Theme 颜色（键帽 `Color.white`）已收敛为 `Theme.keycap`。新增颜色必须走 `Theme.dynamicColor(浅, 深)`，禁止引入静态色。
 
 ## 七、里程碑简史（详节见 git log）
 
@@ -108,6 +110,7 @@ monitor-dev/
 | M12 | 09-22 20:5x | 键盘对齐用户参考图（半高方向键 / Unicode 字形 / 键帽样式模型）+ git 仓库建立 |
 | M13 | 09-22 22:0x | 物理布局对齐 apple-wireless-keyboard.json + JSON 等价性测试 |
 | M14–M20 | 09-22 22:2x–23:1x | 键帽样式精修：小圆角、右侧修饰键右对齐、fn 分角布局与基线对齐、F6–F12 描边图标、画布四周外边距 |
+| M21 | 09-23 00:1x | 夜览（深色）模式：三档显示模式（开启/关闭/跟随系统）、Theme 动态颜色明暗双套色板、设置页分段控件、UserDefaults 持久化重启保持、即时切换无需重启；测试 43→48 |
 
 ## 八、已知边界与风险
 

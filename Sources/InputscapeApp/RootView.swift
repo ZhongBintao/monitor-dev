@@ -4,12 +4,15 @@ import InputscapeKit
 @main
 struct InputscapeAppMain: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    /// 显示模式（夜览）：启动时读回上次选择并应用到 NSApp.appearance。
+    @StateObject private var appearance = AppearanceManager.shared
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(AppModel.shared)
                 .environmentObject(LiveModel.shared)
+                .environmentObject(appearance)
         }
         .windowResizability(.contentMinSize)
     }

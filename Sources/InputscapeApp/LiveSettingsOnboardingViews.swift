@@ -178,6 +178,7 @@ struct LiveView: View {
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var appearance: AppearanceManager
     @State private var confirmDeleteToday = false
     @State private var confirmDeleteAll = false
 
@@ -271,8 +272,30 @@ struct SettingsView: View {
 
     private var appearanceCard: some View {
         Card {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 Text("外观").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
+
+                // 显示模式（夜览）：开启 / 关闭 / 跟随系统；选择即时生效并持久化。
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("显示模式")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.secondary)
+                    Picker("显示模式", selection: Binding(
+                        get: { appearance.mode },
+                        set: { appearance.setMode($0) }
+                    )) {
+                        ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 400)
+                    Text(appearanceFootnote)
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.tertiary)
+                }
+
                 Toggle("减少动效（关闭实时高亮脉冲等动画）", isOn: Binding(
                     get: { model.reduceMotion },
                     set: { model.setReduceMotion($0) }
@@ -280,6 +303,18 @@ struct SettingsView: View {
                 Text("界面遵循系统高对比度与辅助功能设置；键盘热力图同时提供数字与文字说明，不仅依赖颜色。")
                     .font(.system(size: 11)).foregroundColor(Theme.tertiary)
             }
+        }
+    }
+
+    /// 随所选模式给出即时反馈；跟随系统档同步提示系统当前档位。
+    private var appearanceFootnote: String {
+        switch appearance.mode {
+        case .dark:
+            return "已开启夜览：深色配色，夜间使用更柔和。切换对所有页面即时生效。"
+        case .light:
+            return "已关闭夜览：浅色配色。切换对所有页面即时生效。"
+        case .system:
+            return "跟随系统深色模式自动切换，系统切换时应用同步变化（当前系统为\(appearance.systemIsDark ? "深色" : "浅色")）。"
         }
     }
 
