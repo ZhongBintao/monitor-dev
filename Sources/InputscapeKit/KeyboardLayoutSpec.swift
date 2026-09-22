@@ -86,14 +86,18 @@ public struct KeyDefinition: Identifiable, Sendable, Equatable {
 
 // MARK: - 主键盘图规范
 
-/// 78 键 US ANSI MacBook Pro（14/16 英寸，带 Touch ID、全高功能行）
-/// 唯一键盘源，布局与参考图逐键对齐：
+/// 78 键唯一键盘源，物理布局采用 Apple 官方无线键盘实测数据
+/// （`apple-wireless-keyboard.json`，KLE 格式，逐键 x/宽度已核对）：
+/// - 功能行 14 键均为 1.0357u（14.5/14，JSON 实测值）；
+/// - 底行 command 1.25u、space 5u（JSON 实测值）；
 /// - 四个方向键均为半高（←/→ 底部对齐，↑ 顶部、↓ 底部）；
-/// - 右 Shift 的 ⇧ 图标右下对齐；
-/// - 修饰键图标用标准 Unicode（⌘⌥⇧⌃⇪⌫⏎⇥），功能行用 SF Symbols；
-/// - 数字/标点双层标注居中；键帽图标位置逐键对应参考图。
+/// - 修饰键图标用标准 Unicode（⌘⌥⇧⌃⇪⌫⏎⇥），功能行用 SF Symbols。
+/// 对 JSON 的两处修正（应用方约定）：
+/// 1. 功能行高度 0.75 → 1.0，与字母键统一（底行 1.111 同理归一）；
+/// 2. 忽略 JSON 的图标定义，键帽字形沿用本文件的 Unicode/SF 映射。
 /// 任何含键盘的页面（键盘分布 / 总览缩略 / 实时观察）
 /// 都必须从本结构派生，禁止各自硬编码键位数组。
+/// 几何等价性由 KeyboardLayoutSpecTests 的 JSON 比对测试守护。
 public enum KeyboardLayoutSpec {
 
     /// 单排总宽（u）：数字行 1+10+1+1+1.5 = 14.5。
@@ -125,7 +129,9 @@ public enum KeyboardLayoutSpec {
         var out: [KeyDefinition] = []
 
         // ---- 第 0 行：功能行（esc、F1–F12、Touch ID）----
-        out.append(KeyDefinition(id: "Escape", row: 0, x: 0, width: 1,
+        // JSON 实测：14 键等宽 1.0357u（14.5/14），esc 与 F 键同宽、无空隙
+        let fnKeyWidth = 14.5 / 14.0
+        out.append(KeyDefinition(id: "Escape", row: 0, x: 0, width: fnKeyWidth,
                                  word: "esc", style: .wordLeading))
         let functionIcons: [(String, KeyGlyph)] = [
             ("F1", .sfSymbol("sun.min")), ("F2", .sfSymbol("sun.max")),
@@ -136,11 +142,13 @@ public enum KeyboardLayoutSpec {
             ("F11", .sfSymbol("speaker.wave.1.fill")), ("F12", .sfSymbol("speaker.wave.3.fill")),
         ]
         for (i, pair) in functionIcons.enumerated() {
-            out.append(KeyDefinition(id: pair.0, row: 0, x: Double(i + 1), width: 1,
-                                     word: pair.0, glyph: pair.1, style: .fKey))
+            out.append(KeyDefinition(id: pair.0, row: 0, x: fnKeyWidth * Double(i + 1),
+                                     width: fnKeyWidth, word: pair.0, glyph: pair.1,
+                                     style: .fKey))
         }
-        // Touch ID 与 delete 右缘对齐；参考图中为裸圆环（无键帽边框）。
-        out.append(KeyDefinition(id: "TouchID", row: 0, x: 13.5, width: 1,
+        // 第 14 键：Touch ID（JSON 中该位为 A1314 的 eject 键，本应用映射为
+        // Touch ID 圆环，键帽样式沿用现有 UI）；与 delete 右缘对齐。
+        out.append(KeyDefinition(id: "TouchID", row: 0, x: fnKeyWidth * 13, width: fnKeyWidth,
                                  style: .touchID, isObservable: false))
 
         // ---- 第 1 行：数字行（上符号 / 下数字，居中双层标注）----
@@ -221,11 +229,12 @@ public enum KeyboardLayoutSpec {
         out.append(KeyDefinition(id: "OptionLeft", row: 5, x: 2, width: 1,
                                  word: "option", glyph: .unicode("⌥"),
                                  style: .iconWordLeading))
-        out.append(KeyDefinition(id: "CommandLeft", row: 5, x: 3, width: 1,
+        // JSON 实测：command 1.25u、space 5u（与现 MBP 布局的 1/5.5 不同）
+        out.append(KeyDefinition(id: "CommandLeft", row: 5, x: 3, width: 1.25,
                                  word: "command", glyph: .unicode("⌘"),
                                  style: .iconWordLeading))
-        out.append(KeyDefinition(id: "Space", row: 5, x: 4, width: 5.5, style: .blank))
-        out.append(KeyDefinition(id: "CommandRight", row: 5, x: 9.5, width: 1,
+        out.append(KeyDefinition(id: "Space", row: 5, x: 4.25, width: 5, style: .blank))
+        out.append(KeyDefinition(id: "CommandRight", row: 5, x: 9.25, width: 1.25,
                                  word: "command", glyph: .unicode("⌘"),
                                  style: .iconWordLeading))
         out.append(KeyDefinition(id: "OptionRight", row: 5, x: 10.5, width: 1,

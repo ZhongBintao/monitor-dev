@@ -46,7 +46,9 @@ final class KeyboardLayoutSpecTests: XCTestCase {
         XCTAssertEqual(width("Return"), 1.75, accuracy: 0.001)
         XCTAssertEqual(width("ShiftLeft"), 2.25, accuracy: 0.001)
         XCTAssertEqual(width("ShiftRight"), 2.25, accuracy: 0.001)
-        XCTAssertEqual(width("Space"), 5.5, accuracy: 0.001)
+        XCTAssertEqual(width("Space"), 5.0, accuracy: 0.001, "JSON 实测 space 为 5u")
+        XCTAssertEqual(width("CommandLeft"), 1.25, accuracy: 0.001, "JSON 实测 command 为 1.25u")
+        XCTAssertEqual(width("CommandRight"), 1.25, accuracy: 0.001)
         for letter in "QWERTYUIOPASDFGHJKLZXCVBNM" {
             XCTAssertEqual(width(String(letter)), 1.0, accuracy: 0.001)
         }
@@ -56,6 +58,8 @@ final class KeyboardLayoutSpecTests: XCTestCase {
     func testFunctionRow() {
         let esc = KeyboardLayoutSpec.key(withID: "Escape")
         XCTAssertEqual(esc?.x ?? -99, 0, accuracy: 0.001)
+        XCTAssertEqual(esc?.width ?? -99, 14.5 / 14.0, accuracy: 0.001,
+                       "功能行键宽为 JSON 实测的 1.0357u")
         XCTAssertEqual(esc?.style, .wordLeading)
         XCTAssertEqual(esc?.word, "esc")
 
@@ -73,7 +77,8 @@ final class KeyboardLayoutSpecTests: XCTestCase {
 
         let touch = KeyboardLayoutSpec.key(withID: "TouchID")
         XCTAssertNotNil(touch)
-        XCTAssertEqual(touch?.x ?? -99, 13.5, accuracy: 0.001, "Touch ID 应与 delete 右缘对齐")
+        XCTAssertEqual(touch?.x ?? -99, 13 * (14.5 / 14.0), accuracy: 0.002,
+                       "Touch ID x 应为 JSON 实测的第 14 键位（13 × 1.0357）")
         XCTAssertEqual(touch?.style, .touchID, "Touch ID 参考图为裸圆环样式")
         XCTAssertEqual(touch?.isObservable, false, "Touch ID 不产生可观察事件")
         XCTAssertNil(KeyCodeMapper.keyID(for: 0x73), "Touch ID 不应映射任何键码")
@@ -205,5 +210,65 @@ final class KeyboardLayoutSpecTests: XCTestCase {
         let ids = bottom.map { $0.id }
         XCTAssertEqual(ids, ["Fn", "ControlLeft", "OptionLeft", "CommandLeft", "Space",
                              "CommandRight", "OptionRight", "ArrowLeft", "ArrowUp", "ArrowDown", "ArrowRight"])
+    }
+
+    /// 物理布局与 apple-wireless-keyboard.json（KLE 格式）逐键等价（x / 宽度）。
+    /// 两处应用方修正不参与比对：
+    /// ① 各行高度统一为 1.0（JSON 功能行 0.75、底行 1.111 为 KLE 风格化值）；
+    /// ② JSON 的图标定义忽略（键帽字形沿用本应用 UI）。
+    func testGeometryMatchesAppleWirelessJSON() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // InputscapeKitTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // 项目根
+        let data = try Data(contentsOf: root.appendingPathComponent("apple-wireless-keyboard.json"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
+        let jsonRows = try XCTUnwrap(Array(json.dropFirst()) as? [[Any]])
+
+        func geometry(_ row: [Any]) -> [(x: Double, w: Double)] {
+            var x = 0.0, w = 1.0
+            var out: [(x: Double, w: Double)] = []
+            for item in row {
+                if let props = item as? [String: Any] {
+                    x += props["x"] as? Double ?? 0
+                    w = props["w"] as? Double ?? 1
+                } else {
+                    out.append((x, w))
+                    x += w
+                    w = 1
+                }
+            }
+            return out.sorted { ($0.x, $0.w) < ($1.x, $1.w) }
+        }
+
+        // JSON 行 0..4 对应 spec 行 0..4；JSON 行 5+6（底行 + 方向键续行）合并对应 spec 行 5
+        var jsonGeo = jsonRows.map { geometry($0) }
+        let bottom = jsonGeo[5] + jsonGeo[6]
+        jsonGeo[5] = bottom.sorted { ($0.x, $0.w) < ($1.x, $1.w) }
+        jsonGeo.remove(at: 6)
+
+        XCTAssertEqual(jsonGeo.count, KeyboardLayoutSpec.rowCount)
+        for (ri, jgeo) in jsonGeo.enumerated() {
+            let sgeo = KeyboardLayoutSpec.keys.filter { $0.row == ri }
+                .sorted { ($0.x, $0.width) < ($1.x, $1.width) }
+                .map { (x: $0.x, w: $0.width) }
+            XCTAssertEqual(jgeo.count, sgeo.count, "row \(ri) 键数不符")
+            for (ki, j) in jgeo.enumerated() {
+                XCTAssertEqual(j.x, sgeo[ki].x, accuracy: 0.002, "row\(ri) key\(ki) x 不符")
+                XCTAssertEqual(j.w, sgeo[ki].w, accuracy: 0.002, "row\(ri) key\(ki) 宽度不符")
+            }
+        }
+    }
+
+    /// 高度归一（应用方修正 ①）：除半高方向键外，所有键高均为 1.0。
+    func testHeightsNormalizedToLetterHeight() {
+        for key in KeyboardLayoutSpec.keys {
+            if key.style == .iconCentered {
+                XCTAssertEqual(key.height, 0.5, accuracy: 0.001, "\(key.id) 方向键半高")
+            } else {
+                XCTAssertEqual(key.height, 1.0, accuracy: 0.001,
+                               "\(key.id) 高度应与字母键一致（JSON 0.75/1.111 已归一）")
+            }
+        }
     }
 }
