@@ -138,10 +138,10 @@ public enum KeyboardLayoutSpec {
         let functionIcons: [(String, KeyGlyph)] = [
             ("F1", .sfSymbol("sun.min")), ("F2", .sfSymbol("sun.max")),
             ("F3", .sfSymbol("rectangle.split.2x2")), ("F4", .sfSymbol("magnifyingglass")),
-            ("F5", .sfSymbol("mic")), ("F6", .sfSymbol("moon.fill")),
-            ("F7", .sfSymbol("backward.fill")), ("F8", .sfSymbol("playpause.fill")),
-            ("F9", .sfSymbol("forward.fill")), ("F10", .sfSymbol("speaker.slash.fill")),
-            ("F11", .sfSymbol("speaker.wave.1.fill")), ("F12", .sfSymbol("speaker.wave.3.fill")),
+            ("F5", .sfSymbol("mic")), ("F6", .sfSymbol("moon")),
+            ("F7", .sfSymbol("backward")), ("F8", .sfSymbol("playpause")),
+            ("F9", .sfSymbol("forward")), ("F10", .sfSymbol("speaker.slash")),
+            ("F11", .sfSymbol("speaker.wave.1")), ("F12", .sfSymbol("speaker.wave.3")),
         ]
         for (i, pair) in functionIcons.enumerated() {
             out.append(KeyDefinition(id: pair.0, row: 0, x: fnKeyWidth * Double(i + 1),

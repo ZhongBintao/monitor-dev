@@ -218,6 +218,7 @@ struct KeyboardHeatmapView: View {
                 }
             }
             .padding(.leading, unit * 0.03)
+            .padding(.bottom, unit * 0.10) // 与 iconWordLeading 的词底同高（对齐 control 字母）
             .foregroundColor(color)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         case .iconWordLeading:
