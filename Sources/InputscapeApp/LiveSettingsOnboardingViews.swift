@@ -47,7 +47,7 @@ struct LiveView: View {
                                     selectedKeyID: $model.selectedKeyID,
                                     reduceMotion: model.reduceMotion,
                                     minUnit: 34)
-                    .aspectRatio(14.5 / 6, contentMode: .fit)
+                    .aspectRatio(KeyboardHeatmapView.canvasAspectRatio, contentMode: .fit)
             }
         }
     }

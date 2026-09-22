@@ -172,7 +172,7 @@ struct OverviewView: View {
                                     selectedKeyID: $model.selectedKeyID,
                                     reduceMotion: model.reduceMotion,
                                     minUnit: 21)
-                    .aspectRatio(14.5 / 6, contentMode: .fit)
+                    .aspectRatio(KeyboardHeatmapView.canvasAspectRatio, contentMode: .fit)
                 if let top {
                     (Text("今天最常用的是 ").foregroundColor(Theme.secondary)
                      + Text(topKeyName(top.id)).foregroundColor(Theme.keyPurple).bold()
@@ -332,7 +332,7 @@ struct KeyboardDistributionView: View {
                                     selectedKeyID: $selectedKeyID,
                                     reduceMotion: model.reduceMotion,
                                     minUnit: 34)
-                    .aspectRatio(14.5 / 6, contentMode: .fit)
+                    .aspectRatio(KeyboardHeatmapView.canvasAspectRatio, contentMode: .fit)
             }
         }
     }

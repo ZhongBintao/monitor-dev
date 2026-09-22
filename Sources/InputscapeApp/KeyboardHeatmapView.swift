@@ -35,13 +35,21 @@ struct KeyboardHeatmapView: View {
     }
 
     private static let units: CGFloat = CGFloat(KeyboardLayoutSpec.rowUnits)
+    /// 键盘四周外边距（u）：避免键区贴边被裁的观感（用户反馈方向键"向下突出"
+    /// 实为贴边 + 裁切的视觉误差）。
+    private static let outerMargin: CGFloat = 0.1
+    private static let totalUnits: CGFloat = CGFloat(KeyboardLayoutSpec.rowUnits) + 0.2
+    private static let totalRows: CGFloat = CGFloat(KeyboardLayoutSpec.rowCount) + 0.2
+    /// 画布纵横比（含外边距），供调用方 aspectRatio 使用
+    static let canvasAspectRatio: CGFloat = 14.7 / 6.2
 
     var body: some View {
         GeometryReader { geo in
-            let need = Self.units * minUnit
+            let need = Self.totalUnits * minUnit
             let width = max(geo.size.width, need)
-            let height = width * CGFloat(KeyboardLayoutSpec.rowCount) / Self.units
-            let content = canvas(unit: width / Self.units)
+            let unit = width / Self.totalUnits
+            let height = Self.totalRows * unit
+            let content = canvas(unit: unit)
                 // 关键：ZStack 自然尺寸只有最大子键大小（offset 不参与布局），
                 // 必须显式 topLeading 对齐，否则整个键区会被居中放置而错位。
                 .frame(width: width, height: height, alignment: .topLeading)
@@ -63,8 +71,8 @@ struct KeyboardHeatmapView: View {
                     .frame(width: CGFloat(key.width) * unit - gap,
                            height: CGFloat(key.height) * unit - gap,
                            alignment: .topLeading)
-                    .offset(x: CGFloat(key.x) * unit + gap / 2,
-                            y: (CGFloat(key.row) + CGFloat(key.yOffset)) * unit + gap / 2)
+                    .offset(x: (CGFloat(key.x) + Self.outerMargin) * unit + gap / 2,
+                            y: (CGFloat(key.row) + CGFloat(key.yOffset) + Self.outerMargin) * unit + gap / 2)
             }
         }
     }
@@ -176,6 +184,40 @@ struct KeyboardHeatmapView: View {
             }
             .foregroundColor(color)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .iconWordTrailing:
+            // 图标上、单词下，右对齐（右侧 command / option）
+            VStack(alignment: .trailing, spacing: 0) {
+                if let glyph = key.glyph {
+                    glyphView(glyph, size: unit * 0.26, color: color)
+                }
+                Spacer(minLength: 0)
+                if let word = key.word {
+                    Text(word)
+                        .font(.system(size: unit * 0.15, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+            }
+            .padding(.trailing, unit * 0.13)
+            .padding(.vertical, unit * 0.10)
+            .foregroundColor(color)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        case .iconWordCorners:
+            // 图标左下、单词右下，底部对齐（fn）
+            HStack(alignment: .bottom, spacing: unit * 0.08) {
+                if let glyph = key.glyph {
+                    glyphView(glyph, size: unit * 0.22, color: color)
+                }
+                if let word = key.word {
+                    Text(word)
+                        .font(.system(size: unit * 0.15, weight: .medium))
+                }
+            }
+            .padding(.leading, unit * 0.12)
+            .padding(.trailing, unit * 0.10)
+            .padding(.bottom, unit * 0.10)
+            .foregroundColor(color)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         case .iconWordLeading:
             // 图标上、单词下，左对齐（fn / control / option / command）
             VStack(alignment: .leading, spacing: 0) {

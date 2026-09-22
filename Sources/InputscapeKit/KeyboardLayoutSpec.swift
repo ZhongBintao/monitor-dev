@@ -18,7 +18,9 @@ public enum KeycapStyle: String, Sendable {
     case twin                 // 双层标注：上符号、下字符，水平居中（数字/标点行）
     case letter               // 字母，居中
     case fKey                 // 图标上、编号下，居中（F1–F12）
-    case iconWordLeading      // 图标上、单词下，左对齐（fn/control/option/command）
+    case iconWordLeading      // 图标上、单词下，左对齐（左 fn 组/command/control）
+    case iconWordTrailing     // 图标上、单词下，右对齐（右侧 command/option）
+    case iconWordCorners      // 图标左下、单词右下，同排底对齐（fn）
     case iconCentered         // 图标居中（半高方向键）
     case iconLeadingMiddle    // 图标左、垂直居中（tab ⇥）
     case iconTrailingMiddle   // 图标右、垂直居中（delete ⌫ / return ⏎）
@@ -220,9 +222,10 @@ public enum KeyboardLayoutSpec {
         // ---- 第 5 行：修饰键行 + 方向键组 ----
         // 参考图：fn/control/option/command 图标上、单词下，全部左对齐；
         // 四个方向键均为半高——←/→ 底部对齐，↑ 顶部、↓ 底部。
+        // fn：地球左下、字母 fn 右下（与旁边 command 字母同一水平位置）
         out.append(KeyDefinition(id: "Fn", row: 5, x: 0, width: 1,
                                  word: "fn", glyph: .sfSymbol("globe"),
-                                 style: .iconWordLeading))
+                                 style: .iconWordCorners))
         out.append(KeyDefinition(id: "ControlLeft", row: 5, x: 1, width: 1,
                                  word: "control", glyph: .unicode("⌃"),
                                  style: .iconWordLeading))
@@ -236,10 +239,10 @@ public enum KeyboardLayoutSpec {
         out.append(KeyDefinition(id: "Space", row: 5, x: 4.25, width: 5, style: .blank))
         out.append(KeyDefinition(id: "CommandRight", row: 5, x: 9.25, width: 1.25,
                                  word: "command", glyph: .unicode("⌘"),
-                                 style: .iconWordLeading))
+                                 style: .iconWordTrailing))
         out.append(KeyDefinition(id: "OptionRight", row: 5, x: 10.5, width: 1,
                                  word: "option", glyph: .unicode("⌥"),
-                                 style: .iconWordLeading))
+                                 style: .iconWordTrailing))
         out.append(KeyDefinition(id: "ArrowLeft", row: 5, x: 11.5, width: 1, height: 0.5,
                                  yOffset: 0.5, glyph: .unicode("◀"), style: .iconCentered))
         out.append(KeyDefinition(id: "ArrowUp", row: 5, x: 12.5, width: 1, height: 0.5,

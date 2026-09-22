@@ -168,12 +168,15 @@ final class KeyboardLayoutSpecTests: XCTestCase {
     /// 键帽内容位置（参考图逐键）：底行修饰键图标上/单词下左对齐；
     /// 左 shift 左下、右 shift 右下；delete/return 右侧垂直居中；tab 左侧垂直居中。
     func testKeycapContentStyles() {
-        XCTAssertEqual(KeyboardLayoutSpec.key(withID: "Fn")?.style, .iconWordLeading)
+        XCTAssertEqual(KeyboardLayoutSpec.key(withID: "Fn")?.style, .iconWordCorners,
+                       "fn：地球左下、字母 fn 右下")
         XCTAssertEqual(KeyboardLayoutSpec.key(withID: "ControlLeft")?.style, .iconWordLeading)
         XCTAssertEqual(KeyboardLayoutSpec.key(withID: "OptionLeft")?.style, .iconWordLeading)
         XCTAssertEqual(KeyboardLayoutSpec.key(withID: "CommandLeft")?.style, .iconWordLeading)
-        XCTAssertEqual(KeyboardLayoutSpec.key(withID: "CommandRight")?.style, .iconWordLeading)
-        XCTAssertEqual(KeyboardLayoutSpec.key(withID: "OptionRight")?.style, .iconWordLeading)
+        XCTAssertEqual(KeyboardLayoutSpec.key(withID: "CommandRight")?.style, .iconWordTrailing,
+                       "右侧 command 的 ⌘ 与单词右对齐")
+        XCTAssertEqual(KeyboardLayoutSpec.key(withID: "OptionRight")?.style, .iconWordTrailing,
+                       "右侧 option 的 ⌥ 与单词右对齐")
         XCTAssertEqual(KeyboardLayoutSpec.key(withID: "ShiftLeft")?.style, .iconCornerLeading)
         XCTAssertEqual(KeyboardLayoutSpec.key(withID: "ShiftRight")?.style, .iconCornerTrailing,
                        "右 Shift 的 ⇧ 图标应右下对齐")
