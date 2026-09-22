@@ -111,6 +111,7 @@ monitor-dev/
 | M16 | 09-22 22:2x | 键帽圆角缩小（0.14u→0.09u）；方向键底对齐断言固化（KLE 原始文件方向键向下突出 0.111u 系其风格化 hack，应用已修正为底对齐） |
 | M17 | 09-22 23:0x | 右侧 command/option 图标与单词右对齐（.iconWordTrailing）；fn 地球左下 + fn 右下（.iconWordCorners）；键盘画布四周 0.1u 外边距（canvasAspectRatio 供调用方） |
 | M18 | 09-22 23:1x | fn 键帽换行修复（内边距收窄 + fixedSize，"fn" 恢复单行）；离屏渲染副本同步教训 |
+| M19 | 09-22 23:1x | fn 组合基线对齐 control 词底；F6–F12 图标改描边（去 .fill） |
 | M7 | — | **待实施**：触控板增强（见 TOUCHPAD_PROPOSAL.md） |
 
 ## 八、已知边界与风险
