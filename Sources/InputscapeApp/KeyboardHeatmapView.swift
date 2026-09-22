@@ -102,7 +102,7 @@ struct KeyboardHeatmapView: View {
             .accessibilityLabel(Text("Touch ID"))
             .accessibilityHint(Text("不产生可观察事件"))
         } else {
-            let shape = RoundedRectangle(cornerRadius: unit * 0.14, style: .continuous)
+            let shape = RoundedRectangle(cornerRadius: unit * 0.09, style: .continuous)
             Group {
                 ZStack {
                     shape.fill(fill)
