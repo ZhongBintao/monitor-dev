@@ -20,7 +20,7 @@
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| 键盘主图规范 | ✅ 完成 | 78 键 US ANSI 唯一真值，已对齐用户参考图（四方向键半高、Unicode 修饰键字形、F 行 SF Symbols、Touch ID 裸圆环），三页共用同一渲染视图 |
+| 键盘主图规范 | ✅ 完成 | 78 键唯一真值；物理布局对齐 `apple-wireless-keyboard.json`（功能行 1.0357u、command 1.25u、space 5u、四方向键半高），键帽字形 Unicode 修饰键 + F 行 SF Symbols，JSON 等价性测试守护 |
 | 聚合引擎 | ✅ 完成 | 60s 输入段 / 5 分钟桶 / 跨天 / 预设周期与自定义起止快照 / 组合键计数 |
 | 本地存储 | ✅ 完成 | 按日 JSON + 白名单 schema（date/keyCounts/comboCounts/trackpadCounts/buckets/hourlyByOp/activeSeconds），隐私测试守护 |
 | 监听层 | ✅ 完成（待真机授权验证） | keyDown/keyUp + flagsChanged（修饰键含释放）+ systemDefined（F 行媒体键含释放）+ 特殊键码；只输出键位 ID / 操作类别 / 组合和弦 |
@@ -28,7 +28,7 @@
 | 自定义统计区间 | ✅ 完成 | 竖向单月自绘日历，起止可同一天，全页面联动 |
 | 实时跟手反馈 | ✅ 完成 | 三类键释放闭环（keyUp / flagsChanged 位移除 / 媒体键 0xB），按下点亮缩放、松开即灭、无残留 |
 | 七页面 UI | ✅ 完成 | 总览 / 键盘分布 / 触控板操作 / 使用趋势 / 实时观察 / 设置 + 三步引导；ⓘ 说明为 AppKit 原生 Tooltip |
-| XCTest 测试 | ✅ 41/41 | 布局规范 12、聚合 11、存储 5、隐私 5、键码映射 8 |
+| XCTest 测试 | ✅ 43/43 | 布局规范 14（含 JSON 等价性）、聚合 11、存储 5、隐私 5、键码映射 8 |
 
 ## 三、代码结构
 
@@ -38,8 +38,10 @@ monitor-dev/
 ├── build-release.sh                 # ★ 一键：构建(exit 校验)→稳定签名→重启
 ├── run-tests.sh                     # ★ 一键测试（CLT + Xcode XCTest.framework 混编）
 ├── keyboard-preview.png             # 键盘布局离屏渲染预览图
+├── apple-wireless-keyboard.json     # ★ 键盘物理布局数据源（Apple Wireless Keyboard 实测）
 ├── Sources/InputscapeKit/           # 核心库（无 UI 依赖，可独立测试）
-│   ├── KeyboardLayoutSpec.swift     # ★ 78 键主键盘图唯一真值（KeyGlyph + KeycapStyle 逐键定义）
+│   ├── KeyboardLayoutSpec.swift     # ★ 78 键主键盘图唯一真值（几何源自 apple-wireless-keyboard.json）
+│   ├── apple-wireless-keyboard.json # 键盘物理布局数据源（KLE 格式，几何等价性测试守护）
 │   ├── KeyCodeMapper.swift          # kVK 键码→键位 ID + 媒体键/fn 改写键码映射 + ComboKeyBuilder
 │   ├── AggregationEngine.swift      # 聚合：60s 输入段 / 288 桶 / 跨天 / 两种快照
 │   ├── AggregateStore.swift         # 按日 JSON 存储（原子写、白名单 schema）
@@ -76,7 +78,7 @@ monitor-dev/
 
 ## 六、关键技术决策与教训（跨里程碑沉淀）
 
-1. **键盘唯一真值**：所有键盘页面从 `KeyboardLayoutSpec` 派生（KeyGlyph unicode/sfSymbol + 12 种 KeycapStyle 逐键定义），禁止硬编码键位数组。布局与用户参考图逐键对齐：四方向键全半高（←/→/↓ 底对齐、↑ 顶对齐）、右 Shift ⇧ 右下、数字/标点双层居中、Touch ID 裸圆环、caps LED 指示点。
+1. **键盘唯一真值**：所有键盘页面从 `KeyboardLayoutSpec` 派生（KeyGlyph unicode/sfSymbol + 12 种 KeycapStyle 逐键定义），禁止硬编码键位数组。物理布局源自 `apple-wireless-keyboard.json`（Apple Wireless Keyboard 实测，KLE 格式）：功能行 14 键 1.0357u、底行 command 1.25u / space 5u；几何等价性由 JSON 比对测试守护。键帽内容与用户参考图逐键对齐：四方向键全半高（←/→/↓ 底对齐、↑ 顶对齐）、右 Shift ⇧ 右下、数字/标点双层居中、Touch ID 裸圆环、caps LED 指示点。JSON 两处应用方修正：功能行/底行高度归一为字母键 1.0；JSON 图标定义忽略（沿用现有 UI 字形）。
 2. **三类键释放路径必须闭环**：普通键 keyUp / 修饰键 flagsChanged 标志位"移除" / 媒体键 0xB 帧——缺任何一条就是"按下残留"bug（三类都各自漏过一次）。CapsLock 按下/释放 flags 相同（LED 锁定态），用事件交替判定。
 3. **fn 按住会改写键码**（官方 Events.h）：fn+←/→/↑/↓ → Home 115/End 119/PageUp 116/PageDown 121，fn+delete → 117；必须映射回物理方向键/Delete，否则 fn+⌃/⌘+方向键组合整体丢失。
 4. **媒体键解析**：`systemDefined(14) + subtype 8 + data1 位域`（高 16 位 NX_KEYTYPE、bits 8-15 = 0xA 按下 / 0xB 释放、bit 0 重复），KeyCastr/MediaKeyTap 标准方案。
@@ -105,6 +107,7 @@ monitor-dev/
 | M12 | 09-22 20:0x | 媒体键释放闭环；Tooltip 事件驱动状态机重写（仍回归） |
 | M13 | 09-22 20:1x | ⓘ 回归平台原生 Tooltip，删除自研悬浮窗 |
 | M14 | 09-22 20:5x | 虚拟键盘对齐参考图（半高方向键 / Unicode 字形 / 键帽样式逐键定义）+ git 仓库建立 |
+| M15 | 09-22 22:0x | 物理布局对齐 apple-wireless-keyboard.json（功能行 1.0357u / command 1.25u / space 5u；高度归一 1.0；图标沿用现有 UI）；新增 JSON 等价性测试（43 用例） |
 | M7 | — | **待实施**：触控板增强（见 TOUCHPAD_PROPOSAL.md） |
 
 ## 八、已知边界与风险
