@@ -87,14 +87,8 @@ struct RootView: View {
 
     private var sidebar: some View {
         List {
-            Section {
-                ForEach(AppModel.Page.allCases) { page in
-                    row(page)
-                }
-            } header: {
-                Text("INPUTSCAPE")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundColor(Theme.tertiary)
+            ForEach(AppModel.Page.allCases) { page in
+                row(page)
             }
         }
         .listStyle(.sidebar)
@@ -110,7 +104,11 @@ struct RootView: View {
         Button {
             model.page = page
         } label: {
-            HStack {
+            HStack(spacing: 9) {
+                Image(systemName: page.icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(model.page == page ? Theme.keyPurple : Theme.secondary)
+                    .frame(width: 18)
                 Text(page.label)
                     .font(.system(size: 14, weight: model.page == page ? .semibold : .regular))
                     .foregroundColor(model.page == page ? Theme.keyPurple : Theme.navy)

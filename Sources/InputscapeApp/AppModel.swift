@@ -80,6 +80,18 @@ public final class AppModel: ObservableObject {
             case .settings: return "设置"
             }
         }
+
+        /// 侧栏导航图标（SF Symbols，简洁线性风格）
+        public var icon: String {
+            switch self {
+            case .overview: return "square.grid.2x2"
+            case .keyboard: return "keyboard"
+            case .trackpad: return "hand.draw"
+            case .trends: return "chart.line.uptrend.xyaxis"
+            case .live: return "eye"
+            case .settings: return "gearshape"
+            }
+        }
     }
 
     public init(store: AggregateStore = JSONDayStore(directory: JSONDayStore.defaultDirectory()),
@@ -323,16 +335,16 @@ public final class AppModel: ObservableObject {
         refresh()
     }
 
-    /// 顶栏 / 标题用的时段描述。自定义区间跨年时带年份
-    /// （如「2025年12月28日 ~ 2026年1月5日」），同年保持短格式。
+    /// 顶栏 / 标题用的时段描述。自定义区间一律用「M月D日」中文格式，
+    /// 跨年时补年份（如「2025年12月28日 ～ 2026年1月5日」）。
     public var rangeLabel: String {
         if let c = customRange {
             if c.start.prefix(4) != c.end.prefix(4) {
-                return "\(Self.chineseDate(c.start)) ~ \(Self.chineseDate(c.end))"
+                return "\(Self.chineseDate(c.start)) ～ \(Self.chineseDate(c.end))"
             }
             return c.start == c.end
-                ? Self.shortDay(c.start)
-                : "\(Self.shortDay(c.start)) ~ \(Self.shortDay(c.end))"
+                ? Self.chineseMonthDay(c.start)
+                : "\(Self.chineseMonthDay(c.start)) ～ \(Self.chineseMonthDay(c.end))"
         }
         return scope.label
     }
@@ -343,14 +355,20 @@ public final class AppModel: ObservableObject {
         return parts.suffix(2).joined(separator: "-")
     }
 
-    /// "2025-06-09" → "2025年6月9日"（跨年区间展示用，月 / 日去前导零）
-    public static func chineseDate(_ day: String) -> String {
+    /// "2025-06-09" → "6月9日"（月 / 日去前导零）
+    public static func chineseMonthDay(_ day: String) -> String {
         let parts = day.split(separator: "-")
-        guard parts.count == 3,
-              let year = Int(parts[0]), let month = Int(parts[1]), let dayNum = Int(parts[2]) else {
+        guard parts.count == 3, let month = Int(parts[1]), let dayNum = Int(parts[2]) else {
             return day
         }
-        return "\(year)年\(month)月\(dayNum)日"
+        return "\(month)月\(dayNum)日"
+    }
+
+    /// "2025-06-09" → "2025年6月9日"（跨年区间展示用）
+    public static func chineseDate(_ day: String) -> String {
+        let parts = day.split(separator: "-")
+        guard parts.count == 3, let year = Int(parts[0]) else { return day }
+        return "\(year)年" + chineseMonthDay(day)
     }
 
     public func refresh() {

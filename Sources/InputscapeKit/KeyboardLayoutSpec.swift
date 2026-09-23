@@ -137,7 +137,7 @@ public enum KeyboardLayoutSpec {
                                  word: "esc", style: .wordLeading))
         let functionIcons: [(String, KeyGlyph)] = [
             ("F1", .sfSymbol("sun.min")), ("F2", .sfSymbol("sun.max")),
-            ("F3", .sfSymbol("square.stack.3d.up")), ("F4", .sfSymbol("magnifyingglass")),
+            ("F3", .sfSymbol("rectangle.3.group")), ("F4", .sfSymbol("magnifyingglass")),
             ("F5", .sfSymbol("mic")), ("F6", .sfSymbol("moon")),
             ("F7", .sfSymbol("backward")), ("F8", .sfSymbol("playpause")),
             ("F9", .sfSymbol("forward")), ("F10", .sfSymbol("speaker.slash")),
