@@ -3,16 +3,20 @@ import InputscapeKit
 
 /// 自定义统计区间弹层：竖向单月日历 + 可键入的日期输入框。
 ///
-/// 选期流程（三段状态机，修复旧版「选错开始后无法重选」）：
+/// 选期流程（三段状态机）：
 /// - 第 1 次点击日历 → 选定开始日期；
 /// - 第 2 次点击 → 选定结束日期（必须晚于开始日期，否则忽略）；
 /// - 第 3 次点击 → 重置流程，清空选择回到开始日期的选定状态。
 ///
-/// 其他交互：
-/// - 上方「开始 / 结束」输入框一行排布，可键入 YYYY-MM-DD 或
-///   20260913（8 位无分隔符）；提交 / 失焦时自动补前导零、
-///   日号超月收敛到月末、非法输入回退；
-/// - 日历翻页：左右拖拽 / 双指横扫 / 箭头按钮，均带滑动过渡动画；
+/// 日历翻页为「跟手 pager」（对齐相册切换照片的手感）：
+/// - 拖拽 / 双指横扫过程中，当前月网格实时跟随手指平移，
+///   相邻月份网格在侧边候场，两张"照片"连着滑；
+/// - 松手按位移判定（>面板宽 1/3 完成，否则回弹），spring 动画；
+/// - 双指横扫用 scrollWheel 的 phase（began/changed/ended）连续跟手；
+/// - 到达边界（下个月超过当前月）时橡皮筋阻尼。
+///
+/// 其他：
+/// - 输入框可键入 YYYY-MM-DD / 2026-9-3 / 20260913（补零、超月收敛、非法回退）；
 /// - 高亮的开始 / 结束日期带文字标记；区间以浅紫带预览。
 struct CustomRangePicker: View {
     @EnvironmentObject var model: AppModel
@@ -25,8 +29,8 @@ struct CustomRangePicker: View {
     @State private var startDay: Date?
     @State private var endDay: Date?
     @State private var visibleMonth: Date
-    /// 翻页方向：新月份从哪一侧滑入
-    @State private var slideEdge: Edge = .trailing
+    /// 翻页跟手位移：负值 = 露出下个月，正值 = 露出上个月；静止时为 0
+    @State private var dragOffset: CGFloat = 0
     @State private var startText = ""
     @State private var endText = ""
     @FocusState private var focusedField: Field?
@@ -35,6 +39,8 @@ struct CustomRangePicker: View {
     private let weekdaySymbols = ["日", "一", "二", "三", "四", "五", "六"]
     /// 日历网格固定 6 行高（各月 5/6 行不等，固定高度避免翻页时弹层跳动）
     private static let calendarGridHeight: CGFloat = 6 * 34 + 5 * 4
+    /// 日历面板宽度 = 弹层 320 - 左右 padding 16×2（常量，供阈值判定）
+    private static let panelWidth: CGFloat = 288
 
     private static func startOfDay(_ date: Date) -> Date {
         Calendar.current.startOfDay(for: date)
@@ -57,7 +63,7 @@ struct CustomRangePicker: View {
                     .font(.system(size: 15, weight: .bold))
                     .foregroundColor(Theme.navy)
                 Spacer()
-                HelpMarker(text: "三步选定：第 1 次点日历选开始，第 2 次选结束（需晚于开始），第 3 次点击重置重新选。也可在输入框键入 2026-09-13 或 20260913（自动补零、超月收敛到月末）；日历左右拖动或双指横扫翻月。")
+                HelpMarker(text: "三步选定：第 1 次点日历选开始，第 2 次选结束（需晚于开始），第 3 次点击重置重新选。也可在输入框键入 2026-09-13 或 20260913（自动补零、超月收敛到月末）；日历左右拖动或双指横扫翻月，跟手滑动。")
             }
 
             // 开始 / 结束：一行排布的输入框，高亮框 = 当前等待填充的目标
@@ -87,13 +93,32 @@ struct CustomRangePicker: View {
                 }
             }
 
-            // 日历：ZStack 承载翻页过渡（id 置换 + 方向性 move 过渡）
+            // 日历 pager：三联网格（上一月 | 当前月 | 下一月），offset 跟手
             ZStack {
-                monthGrid
+                GeometryReader { geo in
+                    HStack(spacing: 0) {
+                        if let previousMonth {
+                            monthGrid(for: previousMonth)
+                                .frame(width: geo.size.width)
+                        } else {
+                            Color.clear.frame(width: geo.size.width)
+                        }
+                        monthGrid(for: visibleMonth)
+                            .frame(width: geo.size.width)
+                        if let next = nextMonth {
+                            monthGrid(for: next)
+                                .frame(width: geo.size.width)
+                        } else {
+                            Color.clear.frame(width: geo.size.width)
+                        }
+                    }
+                    .frame(width: geo.size.width * 3, alignment: .leading)
+                    .offset(x: -geo.size.width + dragOffset)
+                    .highPriorityGesture(dragGesture(width: geo.size.width))
+                }
             }
-            .frame(height: Self.calendarGridHeight, alignment: .top)
+            .frame(height: Self.calendarGridHeight)
             .clipped()
-            .highPriorityGesture(swipeGesture)
 
             HStack(spacing: 8) {
                 if model.customRange != nil {
@@ -123,9 +148,20 @@ struct CustomRangePicker: View {
         .padding(16)
         .frame(width: 320)
         .background(Theme.card)
-        .background(ScrollSwiper { direction in
-            shiftMonth(direction)
-        }.frame(width: 0, height: 0))
+        .background(ScrollSwiper(
+            onBegin: { dragOffset = 0 },
+            onChanged: { delta in
+                // delta 已是内容方向的位移增量；边界（下月超出当前月）橡皮筋阻尼
+                var target = dragOffset + delta
+                if target < -Self.panelWidth && nextMonth == nil {
+                    target = -Self.panelWidth + (target + Self.panelWidth) * 0.25
+                }
+                dragOffset = target
+            },
+            onEnd: {
+                finishSwipe(dx: dragOffset, width: Self.panelWidth)
+            }
+        ).frame(width: 0, height: 0))
         .onAppear(perform: adoptExistingRange)
         .onChange(of: focusedField) { oldField, _ in
             // 失焦时把键入内容规范化（补零 / 回退）；聚焦不改变选期阶段
@@ -279,26 +315,66 @@ struct CustomRangePicker: View {
         syncTexts()
     }
 
-    // MARK: - 月份翻页（方向性滑动过渡）
+    // MARK: - 月份翻页（跟手 pager）
 
-    private func shiftMonth(_ delta: Int) {
-        guard delta != 0 else { return }
-        if delta > 0 {
-            guard canGoNext else { return }
-            slideEdge = .trailing // 下个月从右侧滑入
+    private var previousMonth: Date? {
+        calendar.date(byAdding: .month, value: -1, to: visibleMonth)
+    }
+
+    private var nextMonth: Date? {
+        guard canGoNext else { return nil }
+        return calendar.date(byAdding: .month, value: 1, to: visibleMonth)
+    }
+
+    private var canGoNext: Bool {
+        guard let next = calendar.date(byAdding: .month, value: 1, to: visibleMonth) else { return false }
+        return next <= Self.startOfMonth(Date())
+    }
+
+    private func turnPage(to target: Date) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+            dragOffset = target > visibleMonth ? -Self.panelWidth : Self.panelWidth
+        } completion: {
+            // 无动画置换当前月：视觉无缝（相邻格内容与置换后一致）
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                visibleMonth = target
+                dragOffset = 0
+            }
+        }
+    }
+
+    private func finishSwipe(dx: CGFloat, width: CGFloat) {
+        let threshold = width / 3
+        if dx < -threshold, let next = nextMonth {
+            turnPage(to: next)
+        } else if dx > threshold, let previous = previousMonth {
+            turnPage(to: previous)
         } else {
-            slideEdge = .leading // 上个月从左侧滑入
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { dragOffset = 0 }
         }
-        guard let next = calendar.date(byAdding: .month, value: delta, to: visibleMonth) else { return }
-        withAnimation(.easeInOut(duration: 0.28)) {
-            visibleMonth = next
-        }
+    }
+
+    private func dragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                var dx = value.translation.width
+                if dx < 0 && nextMonth == nil {
+                    // 已是当前月还往左拖：橡皮筋阻尼
+                    dx *= 0.25
+                }
+                dragOffset = dx
+            }
+            .onEnded { value in
+                finishSwipe(dx: value.translation.width, width: width)
+            }
     }
 
     private var monthHeader: some View {
         HStack {
             Button {
-                shiftMonth(-1)
+                if let previous = previousMonth { turnPage(to: previous) }
             } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 12, weight: .semibold))
@@ -315,16 +391,16 @@ struct CustomRangePicker: View {
             Spacer()
 
             Button {
-                shiftMonth(1)
+                if let next = nextMonth { turnPage(to: next) }
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(canGoNext ? Theme.navy : Theme.tertiary)
+                    .foregroundColor(nextMonth != nil ? Theme.navy : Theme.tertiary)
                     .frame(width: 24, height: 24)
                     .background(Circle().fill(Theme.background))
             }
             .buttonStyle(.plain)
-            .disabled(!canGoNext)
+            .disabled(nextMonth == nil)
         }
     }
 
@@ -334,28 +410,23 @@ struct CustomRangePicker: View {
         return "\(year)年\(month)月"
     }
 
-    private var canGoNext: Bool {
-        guard let next = calendar.date(byAdding: .month, value: 1, to: visibleMonth) else { return false }
-        return next <= Self.startOfMonth(Date())
-    }
-
     // MARK: - 日历网格
 
-    private var gridDays: [Date?] {
-        let daysInMonth = calendar.range(of: .day, in: .month, for: visibleMonth)?.count ?? 30
-        let firstWeekday = calendar.component(.weekday, from: visibleMonth) // 1 = 周日
+    private func gridDays(for month: Date) -> [Date?] {
+        let daysInMonth = calendar.range(of: .day, in: .month, for: month)?.count ?? 30
+        let firstWeekday = calendar.component(.weekday, from: month) // 1 = 周日
         var cells: [Date?] = Array(repeating: nil, count: firstWeekday - 1)
         for day in 0..<daysInMonth {
-            cells.append(calendar.date(byAdding: .day, value: day, to: visibleMonth))
+            cells.append(calendar.date(byAdding: .day, value: day, to: month))
         }
         while cells.count % 7 != 0 { cells.append(nil) }
         return cells
     }
 
-    private var monthGrid: some View {
+    private func monthGrid(for month: Date) -> some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7),
                   spacing: 4) {
-            ForEach(Array(gridDays.enumerated()), id: \.offset) { _, day in
+            ForEach(Array(gridDays(for: month).enumerated()), id: \.offset) { _, day in
                 if let day {
                     dayCell(day)
                 } else {
@@ -363,11 +434,6 @@ struct CustomRangePicker: View {
                 }
             }
         }
-        .id(visibleMonth)
-        .transition(.asymmetric(
-            insertion: .move(edge: slideEdge).combined(with: .opacity),
-            removal: .move(edge: slideEdge == .trailing ? .leading : .trailing).combined(with: .opacity)
-        ))
     }
 
     private func dayCell(_ date: Date) -> some View {
@@ -424,17 +490,6 @@ struct CustomRangePicker: View {
         .accessibilityAddTraits(isEndpoint ? .isSelected : [])
     }
 
-    // MARK: - 滑动切换月份（鼠标 / 触控板按住拖动）
-
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 30)
-            .onEnded { value in
-                let dx = value.translation.width
-                if dx < -30 { shiftMonth(1) } // 左滑 → 下个月
-                else if dx > 30 { shiftMonth(-1) } // 右滑 → 上个月
-            }
-    }
-
     // MARK: - 日期文本解析
 
     private static func dayString(_ date: Date) -> String {
@@ -455,7 +510,7 @@ struct CustomRangePicker: View {
         return Calendar.current.date(from: comps).map { Calendar.current.startOfDay(for: $0) }
     }
 
-    /// 解析键入的日期，两种形态：
+    /// 解析键入的日期，三种形态：
     /// - "2026-9-3"（可缺前导零）/ "2026-09-13"（标准带分隔符）
     /// - "20260913"（8 位无分隔符连续数字）
     /// 日号超出当月收敛到月末；无法解析返回 nil（调用方保持文本不动，提交时回退）。
@@ -489,16 +544,20 @@ struct CustomRangePicker: View {
     }
 }
 
-/// 双指横扫切换月份：本地 scrollWheel 监听，只响应本弹层窗口内的
-/// 横向滚动；deltaX 按手势流累加，累计达阈值触发一次翻页并清零——
-/// 一次滑动恰好翻一页；纵向滚动即清零，其余事件原样放行。
+/// 双指横扫连续跟手：本地 scrollWheel 监听（只响应本弹层窗口），
+/// 利用事件自带 phase（began/changed/ended）驱动 pager 的跟手位移；
+/// 动量阶段（手指已离盘）不消费、原样放行。deltaX 直接是内容方向的
+/// 位移增量，pager 按内容移动方向映射，与自然滚动设置无关。
 private struct ScrollSwiper: NSViewRepresentable {
-    let onSwipe: (Int) -> Void // +1 下一月，-1 上一月
+    let onBegin: () -> Void
+    let onChanged: (CGFloat) -> Void
+    let onEnd: () -> Void
 
     final class CaptureView: NSView {
-        var onSwipe: ((Int) -> Void)?
+        var onBegin: (() -> Void)?
+        var onChanged: ((CGFloat) -> Void)?
+        var onEnd: (() -> Void)?
         private var monitor: Any?
-        private var accumulated: CGFloat = 0
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -509,15 +568,24 @@ private struct ScrollSwiper: NSViewRepresentable {
             guard let window else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
                 guard let self, event.window === window else { return event }
-                guard abs(event.deltaX) >= abs(event.deltaY) else {
-                    accumulated = 0
-                    return event
+                // 动量阶段（手指已离盘）不驱动 pager，原样放行
+                guard event.momentumPhase.isEmpty else { return event }
+                // 精确像素（触控板）直接用；滚轮线单位换算为点
+                let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 12
+                let delta = CGFloat(event.deltaX) * scale
+                switch event.phase {
+                case .began:
+                    onBegin?()
+                case .changed:
+                    // 只响应横向为主的滚动，纵向分量不做翻页
+                    guard abs(event.deltaX) >= abs(event.deltaY) else { return event }
+                    guard delta != 0 else { return event }
+                    onChanged?(delta)
+                case .ended:
+                    onEnd?()
+                default:
+                    break
                 }
-                accumulated += event.deltaX
-                guard abs(accumulated) >= 12 else { return event }
-                let direction = accumulated > 0 ? 1 : -1
-                accumulated = 0
-                onSwipe?(direction)
                 return nil
             }
         }
@@ -531,11 +599,15 @@ private struct ScrollSwiper: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = CaptureView()
-        view.onSwipe = onSwipe
+        view.onBegin = onBegin
+        view.onChanged = onChanged
+        view.onEnd = onEnd
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? CaptureView)?.onSwipe = onSwipe
+        (nsView as? CaptureView)?.onBegin = onBegin
+        (nsView as? CaptureView)?.onChanged = onChanged
+        (nsView as? CaptureView)?.onEnd = onEnd
     }
 }

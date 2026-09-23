@@ -219,7 +219,12 @@ public final class AppModel: ObservableObject {
                 }
             },
             onScroll: { deltaY in
-                let kind: TrackpadOperationKind = deltaY > 0 ? .scrollUp : .scrollDown
+                // 上下滑识别用「手指方向语义」：标签跟随手指物理方向。
+                // Kit 传来的 deltaY 符号描述内容移动方向（>0 = 内容下移）；
+                // 自然滚动开启时内容跟随手指（手指下 = deltaY>0），关闭时相反。
+                let natural = UserDefaults.standard.object(forKey: "com.apple.swipescrolldirection") as? Bool ?? true
+                let fingersDown = natural ? deltaY > 0 : deltaY < 0
+                let kind: TrackpadOperationKind = fingersDown ? .scrollDown : .scrollUp
                 engine.ingestTrackpad(kind)
                 Task { @MainActor in
                     LiveModel.shared.noteTrackpad(kind, inProgress: false)
