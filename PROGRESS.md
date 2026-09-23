@@ -3,7 +3,7 @@
 > macOS 14+ 本地输入习惯分析器 · 唯一交接主文档，随开发推进更新
 > 设计契约：`INPUTSCAPE_DESIGN_PLAN.md`（用户 authored，改动需谨慎）
 > 触控板扩展方案（待拍板）：`TOUCHPAD_PROPOSAL.md`
-> 最近更新：2026-09-22（键盘 UI 对齐参考图与 JSON 布局，样式精修完成）
+> 最近更新：2026-09-23（夜览深色模式 + Touch ID 矩形键帽）
 
 ---
 
@@ -29,7 +29,8 @@
 | 自定义统计区间 | ✅ 完成 | 竖向单月自绘日历，起止可同一天，全页面联动 |
 | 实时跟手反馈 | ✅ 完成 | 三类键释放闭环，按下点亮缩放、松开即灭、无残留 |
 | 七页面 UI | ✅ 完成 | 总览 / 键盘分布 / 触控板操作 / 使用趋势 / 实时观察 / 设置 + 三步引导；ⓘ 说明为 AppKit 原生 Tooltip |
-| XCTest 测试 | ✅ 43/43 | 布局规范 14（含 JSON 等价性、方向键底对齐、高度归一）、聚合 11、存储 5、隐私 5、键码映射 8 |
+| 夜览（深色）模式 | ✅ 完成 | 三档显示模式（开启/关闭/跟随系统）、Theme 动态颜色明暗双套色板、设置页分段控件、即时生效重启保持（M21，用户实现） |
+| XCTest 测试 | ✅ 48/48 | 布局规范 14（含 JSON 等价性、方向键底对齐、高度归一）、聚合 11、存储 5、隐私 5、键码映射 8、外观模式 5 |
 
 ## 三、代码结构
 
@@ -53,17 +54,18 @@ monitor-dev/
 │   ├── AppModel.swift               # 主模型（状态/快照/持久化；高频事件不经此失效全树）
 │   ├── LiveModel.swift              # 实时状态（pressedKeys/heldChips，按键只失效实时页）
 │   ├── AppKitTooltip.swift          # ⓘ 原生 Tooltip 桥接（NSView.toolTip）
+│   ├── AppearanceManager.swift      # 夜览切换核心：NSApp.appearance 应用 + 系统深浅色监听
 │   ├── CustomRangePicker.swift      # 自定义日期区间（单月自绘日历）
 │   ├── RootView.swift               # 侧栏导航 + 状态栏（最小窗口 1100×760）
 │   └── …Views.swift                 # 总览/键盘/触控板/趋势/实时/设置/引导
-└── Tests/InputscapeKitTests/        # 43 个 XCTest 用例
+└── Tests/InputscapeKitTests/        # 48 个 XCTest 用例
 ```
 
 ## 四、构建 / 测试 / 运行
 
 ```bash
 ./build-release.sh   # 一键：release 构建（exit 校验）→ 稳定签名 → 重启
-./run-tests.sh       # 43 个测试（CLT 编 Kit + Xcode XCTest.framework 链接 + xctest 运行器）
+./run-tests.sh       # 48 个测试（CLT 编 Kit + Xcode XCTest.framework 链接 + xctest 运行器）
 ```
 
 - 签名用钥匙串中的 **Apple Development 证书**（TeamID Y99GV96XD6）——签名身份稳定，**TCC 授权跨构建保留**；ad-hoc 签名（`-s -`）会每次重置授权，已弃用。证书约 1 年有效期，续订后需再授权一次。
@@ -110,6 +112,8 @@ monitor-dev/
 | M12 | 09-22 20:5x | 键盘对齐用户参考图（半高方向键 / Unicode 字形 / 键帽样式模型）+ git 仓库建立 |
 | M13 | 09-22 22:0x | 物理布局对齐 apple-wireless-keyboard.json + JSON 等价性测试 |
 | M14–M20 | 09-22 22:2x–23:1x | 键帽样式精修：小圆角、右侧修饰键右对齐、fn 分角布局与基线对齐、F6–F12 描边图标、画布四周外边距 |
+| M21 | 09-23 00:1x | 夜览（深色）模式：三档显示模式（开启/关闭/跟随系统）、Theme 动态颜色明暗双套色板、设置页分段控件、UserDefaults 持久化重启保持、即时切换无需重启；测试 43→48 |
+| M22 | 09-23 10:5x | Touch ID 改为与字母键一致的矩形键帽 + 居中指纹圆环；键帽填充接入 Theme.keycap |
 | M21 | 09-23 00:1x | 夜览（深色）模式：三档显示模式（开启/关闭/跟随系统）、Theme 动态颜色明暗双套色板、设置页分段控件、UserDefaults 持久化重启保持、即时切换无需重启；测试 43→48 |
 
 ## 八、已知边界与风险
