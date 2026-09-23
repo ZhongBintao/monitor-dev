@@ -93,7 +93,7 @@ monitor-dev/
 10. **性能**：高频事件（每次按键）只更新 LiveModel 与引擎计数，不触发主模型 `objectWillChange`；空闲秒数用 TimelineView 局部刷新。
 11. **交付纪律**：`build-release.sh` 固化构建流程（构建退出码显式校验、失败输出日志并中止、稳定签名、重启冒烟）；构建命令禁止接管道后再链式执行（管道退出码会掩盖编译失败）。
 12. **夜览（深色）模式走 AppKit 原生外观机制**：`Theme` 全部语义色改为 `NSColor(name:dynamicProvider:)` 动态颜色（明暗两套配对值），应用侧只改 `NSApp.appearance`（开启=darkAqua / 关闭=aqua / 跟随=nil）——外观变化由系统传播到所有窗口并触发动态颜色重解析，即时生效、无需重启，也不需要逐视图订阅 colorScheme。模式选择持久化在 UserDefaults（`Inputscape.AppearanceMode`），Kit 层枚举 + 存储可测（5 个用例）；唯一非 Theme 颜色（键帽 `Color.white`）已收敛为 `Theme.keycap`。新增颜色必须走 `Theme.dynamicColor(浅, 深)`，禁止引入静态色。
-13. **顶部品牌区是"透明标题栏 + 自绘状态栏"单栏结构**：`WindowChromeFixer`（挂根视图的 NSViewRepresentable，多窗口各自生效）设 `titlebarAppearsTransparent` + `titlebarSeparatorStyle = .none` + `titleVisibility = .hidden`，再配 `.toolbarBackground(.hidden, for: .windowToolbar)`——后者必须加：统一工具栏样式会在标题栏底部画一条 `titlebarSeparatorStyle` 管不到的 1px 分隔线。标题栏区域因此直接露出内容视图的主题背景（左 Theme.background / 右 Theme.card），系统材质带彻底消失；状态栏前景用 Theme.navy/keyPurple，明暗模式与整体主题一致。窗口拖拽、红绿灯、侧栏开关保留。
+13. **顶部品牌区 = 无标题栏窗口 + 纯 HStack 分栏**：`.windowStyle(.hiddenTitleBar)`，根布局用 `HStack { sidebar | 1pt hairline | detail }` 而非 NavigationSplitView——后者会安装隐式 NSToolbar，即使 hiddenTitleBar 也保留 ~52pt 顶部安全区把内容压下去（顶部空白的根源）。detail 上 `.ignoresSafeArea(.container, edges: .top)` 回收 macOS 26 为红绿灯保留的 ~33pt 安全区，状态栏贴住窗口上沿。**两条红线**：① ignoresSafeArea 在 NavigationSplitView 结构下曾引发"切页后状态栏整栏不绘制"（占位保留、内容消失），HStack 结构下已实测切页安全；② detail 的 `.background(Theme.background)` 是唯一背景绘制点，各页面不得自挂背景。窗口拖拽用 `isMovableByWindowBackground` 补回（WindowChromeFixer）；侧栏内容用 `safeAreaPadding(.top, 36)` 让出红绿灯区（代价：侧栏折叠开关随工具栏移除）。逐页验证钩子：`INPUTSCAPE_PAGE=<page>` 环境变量在首帧后切页（RootView.onAppear），**禁止在 init 阶段直接设 page**（同样触发状态栏不绘制）。
 
 ## 七、里程碑简史（详节见 git log）
 
@@ -117,6 +117,7 @@ monitor-dev/
 | M22 | 09-23 10:5x | Touch ID 改为与字母键一致的矩形键帽 + 居中指纹圆环；键帽填充接入 Theme.keycap |
 | M23 | 09-23 11:2x | 侧栏分割线（1pt Theme.hairline 挂侧栏列 trailing，明暗自适应）+ 隐藏标题栏窗口标题（windowToolbarStyle showsTitle:false，消除与状态栏品牌行的重复标识） |
 | M24 | 09-23 11:5x | 顶栏结构合并为一栏：标题栏透明 + toolbarBackground 隐藏（消除系统材质带与分隔线）；F3 图标改 `square.stack.3d.up`（对齐调度中心"多窗平铺"语义） |
+| M25 | 09-23 13:3x | 顶部空白根治：`.hiddenTitleBar` + 纯 HStack 分栏替代 NavigationSplitView（其隐式 NSToolbar 保留 ~52pt 安全区压低内容）；状态栏贴顶、切页安全；`INPUTSCAPE_PAGE` 环境变量诊断钩子 |
 
 ## 八、已知边界与风险
 

@@ -21,7 +21,6 @@ struct LiveView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .background(Theme.background)
     }
 
     private var header: some View {
@@ -193,7 +192,6 @@ struct SettingsView: View {
             }
             .padding(20)
         }
-        .background(Theme.background)
         .confirmationDialog("删除今天的数据？", isPresented: $confirmDeleteToday, titleVisibility: .visible) {
             Button("删除今天的数据", role: .destructive) { model.deleteTodayData() }
             Button("取消", role: .cancel) {}

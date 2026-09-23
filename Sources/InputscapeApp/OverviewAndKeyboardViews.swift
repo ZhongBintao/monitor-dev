@@ -20,7 +20,6 @@ struct OverviewView: View {
             }
             .padding(20)
         }
-        .background(Theme.background)
     }
 
     private var header: some View {
@@ -289,7 +288,6 @@ struct KeyboardDistributionView: View {
             }
             .padding(20)
         }
-        .background(Theme.background)
     }
 
     private var header: some View {

@@ -19,7 +19,6 @@ struct TrackpadOpsView: View {
             }
             .padding(20)
         }
-        .background(Theme.background)
     }
 
     private var header: some View {
@@ -190,7 +189,6 @@ struct TrendsView: View {
             }
             .padding(20)
         }
-        .background(Theme.background)
         .onAppear {
             reload()
             if selectedDay == nil { selectedDay = localSnapshot.daySeries.last?.date }

@@ -14,10 +14,10 @@ struct InputscapeAppMain: App {
                 .environmentObject(LiveModel.shared)
                 .environmentObject(appearance)
         }
-        // 隐藏标题栏里的窗口标题文字：应用已在状态栏自绘品牌行
-        // （波形图标 + Inputscape），标题栏再显示产品名会形成重复标识。
-        // 仅隐藏文字，标题本身保留（Dock / 调度中心仍显示 Inputscape）。
-        .windowToolbarStyle(.unified(showsTitle: false))
+        // 无标题栏：状态栏（品牌行）直接成为窗口第一栏，顶部无空白，
+        // 也不存在工具栏安全区把内容下压的问题。
+        // 拖拽能力由 WindowChromeFixer 的 isMovableByWindowBackground 补回。
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
     }
 }
@@ -37,19 +37,20 @@ struct RootView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        NavigationSplitView {
+        // 不用 NavigationSplitView：它会安装隐式 NSToolbar，即使
+        // .hiddenTitleBar 也保留 ~52pt 顶部安全区把状态栏压下去；
+        // 纯 HStack 分栏没有窗口 chrome 注入，状态栏贴住窗口上沿。
+        HStack(spacing: 0) {
             sidebar
-        } detail: {
-            // 注意：detail 不能再设 minWidth——侧栏 200 + 详情 1100 会超过窗口
-            // 最小宽 1100，导致内容整体超宽、右侧与顶部被裁。
+            // 侧栏与内容区分割线：1pt 主题描边色，全高
+            Rectangle()
+                .fill(Theme.hairline)
+                .frame(width: 1)
             detail
         }
         .frame(minWidth: 1100, minHeight: 760)
         .background(Theme.background)
-        // 隐藏统一工具栏的背景与底部分隔线（titlebarSeparatorStyle 管不到它），
-        // 否则标题栏区域下方会残留一条横贯全宽的 1px 线，维持"两栏"观感
-        .toolbarBackground(.hidden, for: .windowToolbar)
-        // 窗口 chrome 修正：标题栏透明 + 去分隔线，与状态栏合并为一栏
+        // 窗口拖拽：无标题栏后系统不提供拖拽区，用背景拖动补回
         .background(WindowChromeFixer().frame(width: 0, height: 0))
         .sheet(isPresented: $model.onboardingVisible) {
             OnboardingView()
@@ -59,6 +60,14 @@ struct RootView: View {
                 model.onboardingVisible = true
             } else {
                 model.refresh()
+            }
+            // 截图回归 / 诊断钩子：`INPUTSCAPE_PAGE=keyboard` 环境变量指定初始页面，
+            // 供逐页 UI 验证与快照测试使用。必须在首帧渲染之后再切——
+            // 实测在 init 阶段直接设置非默认页会导致状态栏区域不绘制
+            // （布局占位保留、内容缺失），首帧后切换则无此问题。
+            if let pageArg = ProcessInfo.processInfo.environment["INPUTSCAPE_PAGE"],
+               let initial = AppModel.Page(rawValue: pageArg) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.page = initial }
             }
         }
     }
@@ -78,15 +87,10 @@ struct RootView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(Theme.background)
-        // 侧栏与内容区的分割线：两侧底色相同（都是 Theme.background）时
-        // 边界会消失，用 1pt 主题描边色补上（明暗模式各自取 hairline 档）。
-        // 挂在侧栏列自身上——列宽变化或侧栏收起时分割线跟随，不会悬空。
-        .overlay(alignment: .trailing) {
-            Theme.hairline
-                .frame(width: 1)
-                .ignoresSafeArea(.container, edges: .vertical)
-        }
-        .navigationSplitViewColumnWidth(200)
+        // 无标题栏后没有工具栏安全区，红绿灯悬浮在窗口左上角，
+        // 侧栏内容需手动让出这段区域
+        .safeAreaPadding(.top, 36)
+        .frame(width: 200)
     }
 
     private func row(_ page: AppModel.Page) -> some View {
@@ -123,6 +127,15 @@ struct RootView: View {
             }
             .id(model.page)
         }
+        // 背景统一由本容器绘制一次：各页面不得再自挂
+        // `.background(Theme.background)`——切页重建子树时页面背景
+        // 会向上扩展盖掉状态栏（实测整栏消失）。
+        //
+        // 忽略顶部安全区（红绿灯区 ~33pt，macOS 26 为无标题栏窗口保留），
+        // 让状态栏贴住窗口上沿。HStack 结构下没有 NavigationSplitView 的
+        // 隐式工具栏，切页重建子树不会触发此前的渲染丢失问题（已实测）。
+        .ignoresSafeArea(.container, edges: .top)
+        .background(Theme.background)
     }
 
     private var statusBar: some View {
