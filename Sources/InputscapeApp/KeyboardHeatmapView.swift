@@ -96,55 +96,41 @@ struct KeyboardHeatmapView: View {
             ? .white
             : (heatOn && count > 0 ? Theme.heatTextColor(intensity) : (key.isObservable ? Theme.navy : Theme.secondary))
 
-        if key.style == .touchID {
-            // Touch ID：裸圆环（参考图样式，无键帽边框），不可观察无热力
+        // 所有键帽（含 Touch ID）统一矩形样式：同尺寸、同圆角、同描边
+        let shape = RoundedRectangle(cornerRadius: unit * 0.09, style: .continuous)
+        Group {
             ZStack {
-                Circle()
-                    .stroke(isPressed ? Theme.keyPurple : Theme.hairline,
-                            lineWidth: isPressed ? 1.6 : 1)
-                Circle()
-                    .fill(isPressed ? Theme.keyPurple.opacity(0.4) : Theme.keyPurpleSoft.opacity(0.8))
-                    .frame(width: unit * 0.42, height: unit * 0.42)
-            }
-            .onTapGesture { selectedKeyID = key.id }
-            .accessibilityLabel(Text("Touch ID"))
-            .accessibilityHint(Text("不产生可观察事件"))
-        } else {
-            let shape = RoundedRectangle(cornerRadius: unit * 0.09, style: .continuous)
-            Group {
-                ZStack {
-                    shape.fill(fill)
-                    shape.stroke(isSelected || isPressed ? Theme.keyPurple : Theme.hairline,
-                                 lineWidth: isSelected ? 2.2 : (isPressed ? 1.4 : 1))
-                    keycapContent(for: key, unit: unit, color: contentColor)
-                        .padding(unit * 0.10)
-                    if key.homeIndicator {
-                        Capsule()
-                            .fill(contentColor.opacity(0.55))
-                            .frame(width: unit * 0.14, height: unit * 0.05)
-                            .offset(y: unit * 0.36)
-                    }
-                    if key.ledIndicator {
-                        // caps lock LED 指示点（参考图：键帽左上角小圆点）
-                        Circle()
-                            .fill(contentColor.opacity(0.45))
-                            .frame(width: unit * 0.08, height: unit * 0.08)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity,
-                                   alignment: .topLeading)
-                            .padding(.leading, unit * 0.14)
-                            .padding(.top, unit * 0.10)
-                    }
+                shape.fill(fill)
+                shape.stroke(isSelected || isPressed ? Theme.keyPurple : Theme.hairline,
+                             lineWidth: isSelected ? 2.2 : (isPressed ? 1.4 : 1))
+                keycapContent(for: key, unit: unit, color: contentColor)
+                    .padding(unit * 0.10)
+                if key.homeIndicator {
+                    Capsule()
+                        .fill(contentColor.opacity(0.55))
+                        .frame(width: unit * 0.14, height: unit * 0.05)
+                        .offset(y: unit * 0.36)
+                }
+                if key.ledIndicator {
+                    // caps lock LED 指示点（参考图：键帽左上角小圆点）
+                    Circle()
+                        .fill(contentColor.opacity(0.45))
+                        .frame(width: unit * 0.08, height: unit * 0.08)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity,
+                               alignment: .topLeading)
+                        .padding(.leading, unit * 0.14)
+                        .padding(.top, unit * 0.10)
                 }
             }
-            // 跟手反馈：按下瞬间点亮缩放、松开立即消失；减少动效时禁用。
-            .scaleEffect(isPressed && !reduceMotion ? 0.90 : 1)
-            .animation(reduceMotion ? nil : .linear(duration: 0.04), value: isPressed)
-            .animation(reduceMotion ? nil : .linear(duration: 0.08), value: highlightKeyID)
-            .onTapGesture { selectedKeyID = key.id }
-            .accessibilityLabel(Text(accessibilityName(for: key)))
-            .accessibilityValue(Text(count > 0 ? "\(count) 次" : "无数据"))
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
         }
+        // 跟手反馈：按下瞬间点亮缩放、松开立即消失；减少动效时禁用。
+        .scaleEffect(isPressed && !reduceMotion ? 0.90 : 1)
+        .animation(reduceMotion ? nil : .linear(duration: 0.04), value: isPressed)
+        .animation(reduceMotion ? nil : .linear(duration: 0.08), value: highlightKeyID)
+        .onTapGesture { selectedKeyID = key.id }
+        .accessibilityLabel(Text(accessibilityName(for: key)))
+        .accessibilityValue(Text(count > 0 ? "\(count) 次" : "无数据"))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     // MARK: - 键帽内容（按 KeycapStyle 逐样式渲染）
@@ -283,7 +269,18 @@ struct KeyboardHeatmapView: View {
                     .padding(.leading, unit * 0.14)
                     .padding(.bottom, unit * 0.10)
             }
-        case .touchID, .blank:
+        case .touchID:
+            // 指纹识别区：居中圆环 + 内圆，大小与键帽比例协调
+            ZStack {
+                Circle()
+                    .stroke(color.opacity(0.55), lineWidth: unit * 0.045)
+                Circle()
+                    .fill(color.opacity(0.18))
+                    .frame(width: unit * 0.32, height: unit * 0.32)
+            }
+            .frame(width: unit * 0.5, height: unit * 0.5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .blank:
             EmptyView()
         }
     }

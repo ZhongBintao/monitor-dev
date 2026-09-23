@@ -149,7 +149,7 @@ public enum KeyboardLayoutSpec {
                                      style: .fKey))
         }
         // 第 14 键：Touch ID（JSON 中该位为 A1314 的 eject 键，本应用映射为
-        // Touch ID 圆环，键帽样式沿用现有 UI）；与 delete 右缘对齐。
+        // Touch ID）；矩形键帽与字母键一致，内容为居中指纹圆环。
         out.append(KeyDefinition(id: "TouchID", row: 0, x: fnKeyWidth * 13, width: fnKeyWidth,
                                  style: .touchID, isObservable: false))
 
