@@ -111,24 +111,21 @@ struct CustomRangePicker: View {
                 }
             }
 
-            // 日历 pager：三联网格（上一月 | 当前月 | 下一月），offset 跟手
+            // 日历 pager：三联网格（上一月 | 当前月 | 下一月），offset 跟手。
+            // 网格是 Equatable 子视图：跟手拖动时只有 offset 变化，
+            // 月份 / 选区不变 → SwiftUI 跳过网格重建，仅合成 offset 位移，
+            // 保证 60–120Hz 滚动事件下跟手不掉帧。
             ZStack {
                 GeometryReader { geo in
                     HStack(spacing: 0) {
-                        if let previousMonth {
-                            monthGrid(for: previousMonth)
-                                .frame(width: geo.size.width)
-                        } else {
-                            Color.clear.frame(width: geo.size.width)
-                        }
-                        monthGrid(for: visibleMonth)
+                        pagerSlot(previousMonth, width: geo.size.width)
+                        MonthGridView(month: visibleMonth,
+                                      startDay: startDay,
+                                      endDay: endDay,
+                                      onDayClick: handleDayClick)
+                            .equatable()
                             .frame(width: geo.size.width)
-                        if let next = nextMonth {
-                            monthGrid(for: next)
-                                .frame(width: geo.size.width)
-                        } else {
-                            Color.clear.frame(width: geo.size.width)
-                        }
+                        pagerSlot(nextMonth, width: geo.size.width)
                     }
                     .frame(width: geo.size.width * 3, alignment: .leading)
                     .offset(x: -geo.size.width + dragOffset)
@@ -422,7 +419,7 @@ struct CustomRangePicker: View {
             finishSwipe(dx: dragOffset, width: Self.panelWidth)
         }
         scrollEndWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: item)
     }
 
     private func dragGesture(width: CGFloat) -> some Gesture {
@@ -440,6 +437,22 @@ struct CustomRangePicker: View {
                             predictedEnd: value.predictedEndTranslation.width,
                             width: width)
             }
+    }
+
+    /// 侧边候场格：上一月 / 下一月不存在时留空
+    private func pagerSlot(_ month: Date?, width: CGFloat) -> some View {
+        Group {
+            if let month {
+                MonthGridView(month: month,
+                              startDay: startDay,
+                              endDay: endDay,
+                              onDayClick: handleDayClick)
+                    .equatable()
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: width)
     }
 
     private var monthHeader: some View {
@@ -479,86 +492,6 @@ struct CustomRangePicker: View {
         let month = calendar.component(.month, from: visibleMonth)
         let year = calendar.component(.year, from: visibleMonth)
         return "\(year)年\(month)月"
-    }
-
-    // MARK: - 日历网格
-
-    private func gridDays(for month: Date) -> [Date?] {
-        let daysInMonth = calendar.range(of: .day, in: .month, for: month)?.count ?? 30
-        let firstWeekday = calendar.component(.weekday, from: month) // 1 = 周日
-        var cells: [Date?] = Array(repeating: nil, count: firstWeekday - 1)
-        for day in 0..<daysInMonth {
-            cells.append(calendar.date(byAdding: .day, value: day, to: month))
-        }
-        while cells.count % 7 != 0 { cells.append(nil) }
-        return cells
-    }
-
-    private func monthGrid(for month: Date) -> some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7),
-                  spacing: 4) {
-            ForEach(Array(gridDays(for: month).enumerated()), id: \.offset) { _, day in
-                if let day {
-                    dayCell(day)
-                } else {
-                    Color.clear.frame(height: 34)
-                }
-            }
-        }
-    }
-
-    private func dayCell(_ date: Date) -> some View {
-        let today = Self.startOfDay(Date())
-        let isFuture = date > today
-        let isStart = startDay.map { calendar.isDate(date, inSameDayAs: $0) } ?? false
-        let isEnd = endDay.map { calendar.isDate(date, inSameDayAs: $0) } ?? false
-        let isEndpoint = isStart || isEnd
-        let inRange: Bool = {
-            guard let start = startDay, let end = endDay else { return false }
-            return date > start && date < end
-        }()
-        let isToday = calendar.isDateInToday(date)
-
-        let marker: String? = isStart ? "开始" : (isEnd ? "结束" : nil)
-
-        let textColor: Color = {
-            if isFuture { return Theme.tertiary.opacity(0.5) }
-            if isEndpoint { return .white }
-            if inRange { return Theme.navy }
-            return Theme.navy
-        }()
-
-        return VStack(spacing: 1) {
-            Text("\(calendar.component(.day, from: date))")
-                .font(.system(size: 12.5, weight: isEndpoint || isToday ? .semibold : .regular))
-            if let marker {
-                Text(marker)
-                    .font(.system(size: 7, weight: .bold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-        }
-        .foregroundColor(textColor)
-        .frame(maxWidth: .infinity, minHeight: 34)
-        .background(
-            Group {
-                if isEndpoint {
-                    Circle().fill(Theme.keyPurple)
-                } else if inRange {
-                    Rectangle().fill(Theme.keyPurpleSoft)
-                } else if isToday {
-                    Circle().stroke(Theme.hairline, lineWidth: 1)
-                }
-            }
-        )
-        .clipShape(isEndpoint ? AnyShape(Circle()) : AnyShape(Rectangle()))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isFuture else { return }
-            handleDayClick(date)
-        }
-        .accessibilityLabel(Text(Self.dayString(date) + (marker.map { "，\($0)" } ?? "")))
-        .accessibilityAddTraits(isEndpoint ? .isSelected : [])
     }
 
     // MARK: - 日期文本解析
@@ -615,6 +548,111 @@ struct CustomRangePicker: View {
     }
 }
 
+/// 单月日历网格（Equatable）：跟手拖动时只有 pager 的 offset 变化，
+/// 月份与选区不变 → SwiftUI 通过相等性检查跳过整个网格的重建与 diff，
+/// 一次横扫事件只合成一次 offset 位移，帧预算内稳定 60fps+。
+/// 网格用确定性 `Grid`（非 Lazy）：滑入视口的格子不会懒加载 popping。
+private struct MonthGridView: View, Equatable {
+    let month: Date
+    let startDay: Date?
+    let endDay: Date?
+    var onDayClick: (Date) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.month == rhs.month && lhs.startDay == rhs.startDay && lhs.endDay == rhs.endDay
+    }
+
+    var body: some View {
+        Grid(horizontalSpacing: 0, verticalSpacing: 4) {
+            ForEach(rows, id: \.self) { row in
+                GridRow {
+                    ForEach(row, id: \.self) { day in
+                        if let day {
+                            dayCell(day)
+                        } else {
+                            Color.clear.frame(minHeight: 34)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var rows: [[Date?]] {
+        let calendar = Calendar.current
+        let daysInMonth = calendar.range(of: .day, in: .month, for: month)?.count ?? 30
+        let firstWeekday = calendar.component(.weekday, from: month) // 1 = 周日
+        var cells: [Date?] = Array(repeating: nil, count: firstWeekday - 1)
+        for day in 0..<daysInMonth {
+            cells.append(calendar.date(byAdding: .day, value: day, to: month))
+        }
+        while cells.count % 7 != 0 { cells.append(nil) }
+        return stride(from: 0, to: cells.count, by: 7).map { Array(cells[$0..<min($0 + 7, cells.count)]) }
+    }
+
+    private func dayCell(_ date: Date) -> some View {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let isFuture = date > today
+        let isStart = startDay.map { calendar.isDate(date, inSameDayAs: $0) } ?? false
+        let isEnd = endDay.map { calendar.isDate(date, inSameDayAs: $0) } ?? false
+        let isEndpoint = isStart || isEnd
+        let inRange: Bool = {
+            guard let start = startDay, let end = endDay else { return false }
+            return date > start && date < end
+        }()
+        let isToday = calendar.isDateInToday(date)
+
+        let marker: String? = isStart ? "开始" : (isEnd ? "结束" : nil)
+
+        let textColor: Color = {
+            if isFuture { return Theme.tertiary.opacity(0.5) }
+            if isEndpoint { return .white }
+            if inRange { return Theme.navy }
+            return Theme.navy
+        }()
+
+        return VStack(spacing: 1) {
+            Text("\(calendar.component(.day, from: date))")
+                .font(.system(size: 12.5, weight: isEndpoint || isToday ? .semibold : .regular))
+            if let marker {
+                Text(marker)
+                    .font(.system(size: 7, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+        .foregroundColor(textColor)
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .background(
+            Group {
+                if isEndpoint {
+                    Circle().fill(Theme.keyPurple)
+                } else if inRange {
+                    Rectangle().fill(Theme.keyPurpleSoft)
+                } else if isToday {
+                    Circle().stroke(Theme.hairline, lineWidth: 1)
+                }
+            }
+        )
+        .clipShape(isEndpoint ? AnyShape(Circle()) : AnyShape(Rectangle()))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isFuture else { return }
+            onDayClick(date)
+        }
+        .accessibilityLabel(Text(Self.isoString(date) + (marker.map { "，\($0)" } ?? "")))
+        .accessibilityAddTraits(isEndpoint ? .isSelected : [])
+    }
+
+    private static func isoString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.string(from: date)
+    }
+}
+
 /// 双指横扫连续跟手：本地 scrollWheel 监听（只响应本弹层窗口），
 /// 利用事件自带 phase（began/changed/ended）+ momentumPhase（动量）
 /// 上报完整手势流；动量阶段的位移增量以 0.5 衰减驱动 pager——
@@ -661,8 +699,9 @@ private struct ScrollSwiper: NSViewRepresentable {
                 case .began:
                     onEvent?(.began)
                 case .changed:
-                    // 只响应横向为主的滚动，纵向分量不做翻页
-                    guard abs(event.deltaX) >= abs(event.deltaY), delta != 0 else { return event }
+                    // 不按轴向丢事件：纵向滚动 deltaX≈0 本身无位移，
+                    // 丢事件反而造成跟手顿挫
+                    guard delta != 0 else { return event }
                     onEvent?(.changed(delta))
                 case .ended:
                     onEvent?(.ended)
