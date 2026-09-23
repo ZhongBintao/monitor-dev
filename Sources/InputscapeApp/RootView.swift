@@ -46,6 +46,11 @@ struct RootView: View {
         }
         .frame(minWidth: 1100, minHeight: 760)
         .background(Theme.background)
+        // 隐藏统一工具栏的背景与底部分隔线（titlebarSeparatorStyle 管不到它），
+        // 否则标题栏区域下方会残留一条横贯全宽的 1px 线，维持"两栏"观感
+        .toolbarBackground(.hidden, for: .windowToolbar)
+        // 窗口 chrome 修正：标题栏透明 + 去分隔线，与状态栏合并为一栏
+        .background(WindowChromeFixer().frame(width: 0, height: 0))
         .sheet(isPresented: $model.onboardingVisible) {
             OnboardingView()
         }
