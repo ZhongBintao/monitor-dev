@@ -69,6 +69,19 @@ struct RootView: View {
                let initial = AppModel.Page(rawValue: pageArg) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.page = initial }
             }
+            // 诊断钩子：`INPUTSCAPE_RANGE=2026-09-10:2026-09-20` 直接应用自定义区间；
+            // `INPUTSCAPE_OPEN_CUSTOM_RANGE=1` 自动打开自定义区间弹层。
+            if let rangeArg = ProcessInfo.processInfo.environment["INPUTSCAPE_RANGE"] {
+                let parts = rangeArg.split(separator: ":")
+                if parts.count == 2 {
+                    model.setCustomRange(start: String(parts[0]), end: String(parts[1]))
+                }
+            }
+            if ProcessInfo.processInfo.environment["INPUTSCAPE_OPEN_CUSTOM_RANGE"] == "1" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
+                    model.customRangeEditorVisible = true
+                }
+            }
         }
     }
 
@@ -149,7 +162,11 @@ struct RootView: View {
             Spacer()
             if model.page == .overview {
                 PeriodPicker(selection: $model.scope,
-                             onChange: { model.refresh() },
+                             onChange: {
+                                 // 必须走 setScope 清掉自定义区间——只 refresh() 的话
+                                 // customRange 仍在，快照永远停在自定义区间（任务3 bug）。
+                                 model.setScope(model.scope)
+                             },
                              isCustomActive: model.customRange != nil,
                              onCustom: { model.customRangeEditorVisible = true })
                 .popover(isPresented: $model.customRangeEditorVisible, arrowEdge: .bottom) {

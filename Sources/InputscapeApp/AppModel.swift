@@ -323,9 +323,13 @@ public final class AppModel: ObservableObject {
         refresh()
     }
 
-    /// 顶栏 / 标题用的时段描述。
+    /// 顶栏 / 标题用的时段描述。自定义区间跨年时带年份
+    /// （如「2025年12月28日 ~ 2026年1月5日」），同年保持短格式。
     public var rangeLabel: String {
         if let c = customRange {
+            if c.start.prefix(4) != c.end.prefix(4) {
+                return "\(Self.chineseDate(c.start)) ~ \(Self.chineseDate(c.end))"
+            }
             return c.start == c.end
                 ? Self.shortDay(c.start)
                 : "\(Self.shortDay(c.start)) ~ \(Self.shortDay(c.end))"
@@ -337,6 +341,16 @@ public final class AppModel: ObservableObject {
         let parts = day.split(separator: "-")
         guard parts.count == 3 else { return day }
         return parts.suffix(2).joined(separator: "-")
+    }
+
+    /// "2025-06-09" → "2025年6月9日"（跨年区间展示用，月 / 日去前导零）
+    public static func chineseDate(_ day: String) -> String {
+        let parts = day.split(separator: "-")
+        guard parts.count == 3,
+              let year = Int(parts[0]), let month = Int(parts[1]), let dayNum = Int(parts[2]) else {
+            return day
+        }
+        return "\(year)年\(month)月\(dayNum)日"
     }
 
     public func refresh() {

@@ -1,20 +1,28 @@
 import SwiftUI
 import InputscapeKit
 
-/// 自定义统计区间弹层：竖向堆叠的单月日历。
-/// 交互：顶部「开始 / 结束」两个模式胶囊（显示已选日期），
-/// 下方一个月历网格；选完开始自动切到结束，起止允许同一天，
-/// 未来日期不可选。区间以浅紫带预览，两端为实心圆。
+/// 自定义统计区间弹层：竖向单月日历 + 可键入的日期输入框。
+/// 交互：
+/// - 上方「开始 / 结束」输入框一行排布，可直接键入 YYYY-MM-DD
+///   （提交 / 失焦时自动补前导零、日号超月收敛到月末、非法输入回退）；
+///   点击输入框即切换填充目标，点日历填充当前目标，选完开始自动切到「结束」；
+/// - 日历面板左右拖拽或双指横扫切换月份；
+/// - 高亮的开始 / 结束日期带文字标记（起止同日显示「起止」）；
+/// - 区间以浅紫带预览，两端为实心圆。
 struct CustomRangePicker: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
     private enum Mode { case start, end }
+    private enum Field { case start, end }
 
     @State private var mode: Mode = .start
     @State private var startDay: Date
     @State private var endDay: Date
     @State private var visibleMonth: Date
+    @State private var startText: String
+    @State private var endText: String
+    @FocusState private var focusedField: Field?
 
     private let calendar = Calendar.current
     private let weekdaySymbols = ["日", "一", "二", "三", "四", "五", "六"]
@@ -33,6 +41,8 @@ struct CustomRangePicker: View {
         _startDay = State(initialValue: today)
         _endDay = State(initialValue: today)
         _visibleMonth = State(initialValue: Self.startOfMonth(today))
+        _startText = State(initialValue: Self.dayString(today))
+        _endText = State(initialValue: Self.dayString(today))
     }
 
     var body: some View {
@@ -42,13 +52,18 @@ struct CustomRangePicker: View {
                     .font(.system(size: 15, weight: .bold))
                     .foregroundColor(Theme.navy)
                 Spacer()
-                HelpMarker(text: "先点「开始」再点日期，选完自动切到「结束」；两个日期可以相同。深紫圆点为区间两端，浅紫为区间中间。")
+                HelpMarker(text: "点日历日期填充目标框（选完开始自动切到「结束」），两个日期可以相同；也可在输入框直接键入 YYYY-MM-DD（如 2026-9-3，回车自动补零），日号超出当月会收敛到月末；日历面板左右拖动或双指横扫切换月份。")
             }
 
-            HStack(spacing: 8) {
-                modeChip("开始", startDay, mode: .start)
-                modeChip("结束", endDay, mode: .end)
-                Spacer()
+            // 开始 / 结束：一行排布的输入框，兼作填充目标指示（高亮 = 当前目标）
+            HStack(spacing: 10) {
+                dateField(title: "开始", text: $startText, field: .start,
+                          isActive: mode == .start,
+                          onCommit: normalizeStart)
+                dateField(title: "结束", text: $endText, field: .end,
+                          isActive: mode == .end,
+                          onCommit: normalizeEnd)
+                Spacer(minLength: 0)
             }
 
             monthHeader
@@ -64,6 +79,7 @@ struct CustomRangePicker: View {
             }
 
             dayGrid
+                .gesture(swipeGesture)
 
             HStack(spacing: 8) {
                 if model.customRange != nil {
@@ -77,6 +93,8 @@ struct CustomRangePicker: View {
                 Button("取消") { dismiss() }
                     .buttonStyle(.bordered)
                 Button("应用区间") {
+                    normalizeStart()
+                    normalizeEnd()
                     model.setCustomRange(start: Self.dayString(startDay),
                                          end: Self.dayString(endDay))
                     dismiss()
@@ -89,29 +107,114 @@ struct CustomRangePicker: View {
         .padding(16)
         .frame(width: 320)
         .background(Theme.card)
+        .background(ScrollSwiper { delta in
+            // 自然滚动方向：手指左扫 = 内容左移 = 看下个月
+            if delta > 0 { moveMonth(1) } else if delta < 0 { moveMonth(-1) }
+        }.frame(width: 0, height: 0))
+        .onAppear(perform: adoptExistingRange)
+        .onChange(of: focusedField) { oldField, newField in
+            if let oldField {
+                if oldField == .start { normalizeStart() } else { normalizeEnd() }
+            }
+            if let newField {
+                mode = (newField == .start) ? .start : .end
+            }
+        }
     }
 
-    // MARK: - 模式胶囊
+    // MARK: - 日期输入框（一行内完整显示，支持键入）
 
-    private func modeChip(_ title: String, _ date: Date, mode target: Mode) -> some View {
-        let active = mode == target
-        return Button {
-            mode = target
-        } label: {
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(active ? Theme.keyPurple : Theme.secondary)
-                Text(Self.dayString(date))
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundColor(active ? Theme.navy : Theme.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(Capsule().fill(active ? Theme.keyPurpleSoft : Theme.background))
-            .overlay(Capsule().stroke(active ? Theme.keyPurple : Theme.hairline, lineWidth: 1))
+    private func dateField(title: String,
+                           text: Binding<String>,
+                           field: Field,
+                           isActive: Bool,
+                           onCommit: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(isActive ? Theme.keyPurple : Theme.secondary)
+            TextField("YYYY-MM-DD", text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .foregroundColor(Theme.navy)
+                .focused($focusedField, equals: field)
+                .onSubmit(onCommit)
+                .onChange(of: text.wrappedValue) { _, newValue in
+                    textEdited(field, newValue)
+                }
+                .frame(width: 112)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isActive ? Theme.keyPurpleSoft : Theme.background)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(isActive ? Theme.keyPurple : Theme.hairline,
+                                lineWidth: isActive ? 1.2 : 1)
+                )
         }
-        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .onTapGesture { focusedField = field }
+    }
+
+    /// 键入过程中的实时解析：只接受完整合法的日期（日历高亮即时跟随），
+    /// 不回写文本——补零等格式化留到提交 / 失焦，避免打断输入。
+    private func textEdited(_ field: Field, _ newValue: String) {
+        guard let date = Self.parseDateText(newValue) else { return }
+        switch field {
+        case .start:
+            startDay = date
+            if endDay < date {
+                endDay = date
+                endText = Self.dayString(endDay)
+            }
+        case .end:
+            endDay = date
+            if startDay > date {
+                startDay = date
+                startText = Self.dayString(startDay)
+            }
+        }
+        visibleMonth = Self.startOfMonth(date)
+    }
+
+    private func normalizeStart() {
+        if let date = Self.parseDateText(startText) {
+            startDay = date
+            if endDay < date {
+                endDay = date
+                endText = Self.dayString(endDay)
+            }
+            visibleMonth = Self.startOfMonth(date)
+        }
+        startText = Self.dayString(startDay) // 非法输入回退为当前有效值；合法值补零
+    }
+
+    private func normalizeEnd() {
+        if let date = Self.parseDateText(endText) {
+            endDay = date
+            if startDay > date {
+                startDay = date
+                startText = Self.dayString(startDay)
+            }
+            visibleMonth = Self.startOfMonth(date)
+        }
+        endText = Self.dayString(endDay)
+    }
+
+    /// 打开弹层时回填当前生效的自定义区间（再次打开不再是空白的今天）。
+    private func adoptExistingRange() {
+        guard let range = model.customRange,
+              let start = Self.dateFromISO(range.start),
+              let end = Self.dateFromISO(range.end) else { return }
+        startDay = start
+        endDay = end
+        startText = range.start
+        endText = range.end
+        visibleMonth = Self.startOfMonth(start)
+        mode = .end
     }
 
     // MARK: - 月份导航
@@ -186,7 +289,7 @@ struct CustomRangePicker: View {
                 if let day {
                     dayCell(day)
                 } else {
-                    Color.clear.frame(height: 30)
+                    Color.clear.frame(height: 34)
                 }
             }
         }
@@ -201,6 +304,13 @@ struct CustomRangePicker: View {
         let inRange = !isEndpoint && date > startDay && date < endDay
         let isToday = calendar.isDateInToday(date)
 
+        let marker: String? = {
+            if isStart && isEnd { return "起止" }
+            if isStart { return "开始" }
+            if isEnd { return "结束" }
+            return nil
+        }()
+
         let textColor: Color = {
             if isFuture { return Theme.tertiary.opacity(0.5) }
             if isEndpoint { return .white }
@@ -208,29 +318,37 @@ struct CustomRangePicker: View {
             return Theme.navy
         }()
 
-        return Text("\(calendar.component(.day, from: date))")
-            .font(.system(size: 12.5, weight: isEndpoint || isToday ? .semibold : .regular))
-            .foregroundColor(textColor)
-            .frame(maxWidth: .infinity, minHeight: 30)
-            .background(
-                Group {
-                    if isEndpoint {
-                        Circle().fill(Theme.keyPurple)
-                    } else if inRange {
-                        Rectangle().fill(Theme.keyPurpleSoft)
-                    } else if isToday {
-                        Circle().stroke(Theme.hairline, lineWidth: 1)
-                    }
-                }
-            )
-            .clipShape(isEndpoint ? AnyShape(Circle()) : AnyShape(Rectangle()))
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard !isFuture else { return }
-                select(date)
+        return VStack(spacing: 1) {
+            Text("\(calendar.component(.day, from: date))")
+                .font(.system(size: 12.5, weight: isEndpoint || isToday ? .semibold : .regular))
+            if let marker {
+                Text(marker)
+                    .font(.system(size: 7, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
-            .accessibilityLabel(Text(Self.dayString(date)))
-            .accessibilityAddTraits(isEndpoint ? .isSelected : [])
+        }
+        .foregroundColor(textColor)
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .background(
+            Group {
+                if isEndpoint {
+                    Circle().fill(Theme.keyPurple)
+                } else if inRange {
+                    Rectangle().fill(Theme.keyPurpleSoft)
+                } else if isToday {
+                    Circle().stroke(Theme.hairline, lineWidth: 1)
+                }
+            }
+        )
+        .clipShape(isEndpoint ? AnyShape(Circle()) : AnyShape(Rectangle()))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isFuture else { return }
+            select(date)
+        }
+        .accessibilityLabel(Text(Self.dayString(date) + (marker.map { "，\($0)" } ?? "")))
+        .accessibilityAddTraits(isEndpoint ? .isSelected : [])
     }
 
     private func select(_ date: Date) {
@@ -243,12 +361,101 @@ struct CustomRangePicker: View {
             endDay = date
             if startDay > date { startDay = date }
         }
+        startText = Self.dayString(startDay)
+        endText = Self.dayString(endDay)
     }
+
+    // MARK: - 滑动切换月份（鼠标 / 触控板按住拖动）
+
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 25)
+            .onEnded { value in
+                let dx = value.translation.width
+                if dx < -25 { moveMonth(1) } // 左滑 → 下个月
+                else if dx > 25 { moveMonth(-1) } // 右滑 → 上个月
+            }
+    }
+
+    // MARK: - 日期文本解析
 
     private static func dayString(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter.string(from: date)
+    }
+
+    private static func dateFromISO(_ text: String) -> Date? {
+        let parts = text.split(separator: "-")
+        guard parts.count == 3,
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else { return nil }
+        var comps = DateComponents()
+        comps.year = year
+        comps.month = month
+        comps.day = day
+        return Calendar.current.date(from: comps).map { Calendar.current.startOfDay(for: $0) }
+    }
+
+    /// 解析键入的日期：接受缺前导零（"2026-9-3"）；日号超出当月收敛到月末；
+    /// 无法解析返回 nil（调用方保持文本不动，提交时回退为当前有效值）。
+    static func parseDateText(_ raw: String) -> Date? {
+        let parts = raw.split(separator: "-")
+        guard parts.count == 3,
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
+              (2000...2100).contains(year), (1...12).contains(month) else { return nil }
+        var comps = DateComponents()
+        comps.year = year
+        comps.month = month
+        comps.day = max(1, min(day, daysInMonth(year: year, month: month)))
+        return Calendar.current.date(from: comps).map { Calendar.current.startOfDay(for: $0) }
+    }
+
+    private static func daysInMonth(year: Int, month: Int) -> Int {
+        guard let first = Calendar.current.date(from: DateComponents(year: year, month: month, day: 1)),
+              let interval = Calendar.current.dateInterval(of: .month, for: first) else { return 30 }
+        return Int(interval.duration / 86400)
+    }
+}
+
+/// 双指横扫切换月份：本地 scrollWheel 监听，只响应本弹层窗口内的
+/// 横向滚动（|deltaX| 显著大于 |deltaY| 且超过阈值），消费该事件；
+/// 其余滚动事件原样放行。
+private struct ScrollSwiper: NSViewRepresentable {
+    let onSwipe: (CGFloat) -> Void
+
+    final class CaptureView: NSView {
+        var onSwipe: ((CGFloat) -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+            guard let window else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, event.window === window else { return event }
+                guard abs(event.deltaX) > abs(event.deltaY), abs(event.deltaX) > 2 else { return event }
+                onSwipe?(event.deltaX)
+                return nil
+            }
+        }
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = CaptureView()
+        view.onSwipe = onSwipe
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? CaptureView)?.onSwipe = onSwipe
     }
 }

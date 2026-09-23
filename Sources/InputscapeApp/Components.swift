@@ -67,7 +67,9 @@ struct PeriodPicker: View {
         HStack(spacing: 2) {
             ForEach(PeriodScope.allCases, id: \.self) { scope in
                 Button {
-                    if selection != scope {
+                    // 自定义区间激活时，点当前档位也必须触发 onChange——
+                    // 否则 customRange 清不掉，按钮看起来"无反应"
+                    if selection != scope || isCustomActive {
                         selection = scope
                         onChange()
                     }

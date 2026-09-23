@@ -118,6 +118,7 @@ monitor-dev/
 | M23 | 09-23 11:2x | 侧栏分割线（1pt Theme.hairline 挂侧栏列 trailing，明暗自适应）+ 隐藏标题栏窗口标题（windowToolbarStyle showsTitle:false，消除与状态栏品牌行的重复标识） |
 | M24 | 09-23 11:5x | 顶栏结构合并为一栏：标题栏透明 + toolbarBackground 隐藏（消除系统材质带与分隔线）；F3 图标改 `square.stack.3d.up`（对齐调度中心"多窗平铺"语义） |
 | M25 | 09-23 13:3x | 顶部空白根治：`.hiddenTitleBar` + 纯 HStack 分栏替代 NavigationSplitView（其隐式 NSToolbar 保留 ~52pt 安全区压低内容）；状态栏贴顶、切页安全；`INPUTSCAPE_PAGE` 环境变量诊断钩子 |
+| M26 | 09-23 16:1x | 自定义区间弹层重做：开始/结束输入框一行排布（替代折叠的胶囊），支持键入 YYYY-MM-DD（补零/超月收敛/非法回退）；跨年区间标题带年份；修 PeriodPicker 自定义区间激活时点预设档无反应（守卫 + onChange 双处修复）；日历支持拖拽/双指横扫切换月份，端点带「开始/结束」标记，重开弹层回填当前区间 |
 
 ## 八、已知边界与风险
 
