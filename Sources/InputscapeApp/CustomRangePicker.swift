@@ -86,7 +86,7 @@ struct CustomRangePicker: View {
                     .font(.system(size: 15, weight: .bold))
                     .foregroundColor(Theme.navy)
                 Spacer()
-                HelpMarker(text: "三步选定：第 1 次点日历选开始，第 2 次选结束（需晚于开始），第 3 次点击重置重新选。也可在输入框键入 2026-09-13 或 20260913（自动补零、超月收敛到月末）；日历左右拖动或双指横扫翻月，跟手滑动。")
+                HelpMarker(text: "三步选定：第 1 次点日历选开始，第 2 次选结束（不早于开始日期，可与开始同一天），第 3 次点击重置重新选。也可在输入框键入 2026-09-13 或 20260913（自动补零、超月收敛到月末）；日历左右拖动或双指横扫翻月，跟手滑动。")
             }
 
             // 开始 / 结束：一行排布的输入框，高亮框 = 当前等待填充的目标
@@ -154,7 +154,7 @@ struct CustomRangePicker: View {
                 Button("应用区间") {
                     normalizeStart()
                     normalizeEnd()
-                    guard let start = startDay, let end = endDay, end > start else { return }
+                    guard let start = startDay, let end = endDay, end >= start else { return }
                     model.setCustomRange(start: Self.dayString(start),
                                          end: Self.dayString(end))
                     dismiss()
@@ -200,7 +200,7 @@ struct CustomRangePicker: View {
         case .pickingStart:
             return "第 1 步：点击日历选择开始日期"
         case .pickingEnd:
-            return "第 2 步：点击日历选择结束日期（需晚于开始日期）"
+            return "第 2 步：点击日历选择结束日期（不早于开始日期，可选同一天）"
         case .complete:
             guard let start = startDay, let end = endDay else { return "" }
             return "已选 \(AppModel.chineseMonthDay(Self.dayString(start))) ～ \(AppModel.chineseMonthDay(Self.dayString(end))) · 点击日历任意日期重置重新选"
@@ -251,8 +251,8 @@ struct CustomRangePicker: View {
         switch field {
         case .start:
             startDay = date
-            if let end = endDay, end <= date {
-                // 新的开始使原结束失效，回到选结束阶段
+            if let end = endDay, end < date {
+                // 新的开始晚于原结束，原结束失效，回到选结束阶段
                 endDay = nil
                 endText = ""
                 stage = .pickingEnd
@@ -262,7 +262,7 @@ struct CustomRangePicker: View {
                 stage = .pickingEnd
             }
         case .end:
-            guard let start = startDay, date > start else { return }
+            guard let start = startDay, date >= start else { return }
             endDay = date
             stage = .complete
         }
@@ -272,7 +272,7 @@ struct CustomRangePicker: View {
     private func normalizeStart() {
         if let date = Self.parseFlexible(startText) {
             startDay = date
-            if let end = endDay, end <= date {
+            if let end = endDay, end < date {
                 endDay = nil
                 endText = ""
                 stage = .pickingEnd
@@ -287,21 +287,21 @@ struct CustomRangePicker: View {
 
     private func normalizeEnd() {
         if let date = Self.parseFlexible(endText) {
-            if let start = startDay, date > start {
+            if let start = startDay, date >= start {
                 endDay = date
                 stage = .complete
             }
-            // 无开始日期或未晚于开始：视为无效，文本回退
+            // 无开始日期或早于开始：视为无效，文本回退
         }
         endText = endDay.map(Self.dayString) ?? ""
     }
 
-    /// 打开弹层时回填当前生效的自定义区间（再次打开不再空白）。
+    /// 打开弹层时回填当前生效的自定义区间（再次打开不再空白；允许单日区间）。
     private func adoptExistingRange() {
         guard let range = model.customRange,
               let start = Self.dateFromISO(range.start),
               let end = Self.dateFromISO(range.end),
-              end > start else { return }
+              end >= start else { return }
         startDay = start
         endDay = end
         stage = .complete
@@ -324,8 +324,8 @@ struct CustomRangePicker: View {
             endDay = nil
             stage = .pickingEnd
         case .pickingEnd:
-            // 结束日期必须晚于开始日期，否则忽略本次点击
-            guard let start = startDay, date > start else { return }
+            // 结束日期不早于开始日期即可（允许与开始同一天）
+            guard let start = startDay, date >= start else { return }
             endDay = date
             stage = .complete
         case .complete:
@@ -648,7 +648,13 @@ private struct MonthGridView: View, Equatable {
         }()
         let isToday = calendar.isDateInToday(date)
 
-        let marker: String? = isStart ? "开始" : (isEnd ? "结束" : nil)
+        // 同一天既是开始又是结束：合并标记（列宽 ~41pt，7pt 字号可容纳）
+        let marker: String? = {
+            if isStart && isEnd { return "开始 · 结束" }
+            if isStart { return "开始" }
+            if isEnd { return "结束" }
+            return nil
+        }()
 
         let textColor: Color = {
             if isFuture { return Theme.tertiary.opacity(0.5) }
