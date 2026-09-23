@@ -8,12 +8,16 @@ struct InputscapeAppMain: App {
     @StateObject private var appearance = AppearanceManager.shared
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Inputscape") {
             RootView()
                 .environmentObject(AppModel.shared)
                 .environmentObject(LiveModel.shared)
                 .environmentObject(appearance)
         }
+        // 隐藏标题栏里的窗口标题文字：应用已在状态栏自绘品牌行
+        // （波形图标 + Inputscape），标题栏再显示产品名会形成重复标识。
+        // 仅隐藏文字，标题本身保留（Dock / 调度中心仍显示 Inputscape）。
+        .windowToolbarStyle(.unified(showsTitle: false))
         .windowResizability(.contentMinSize)
     }
 }
@@ -69,6 +73,14 @@ struct RootView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(Theme.background)
+        // 侧栏与内容区的分割线：两侧底色相同（都是 Theme.background）时
+        // 边界会消失，用 1pt 主题描边色补上（明暗模式各自取 hairline 档）。
+        // 挂在侧栏列自身上——列宽变化或侧栏收起时分割线跟随，不会悬空。
+        .overlay(alignment: .trailing) {
+            Theme.hairline
+                .frame(width: 1)
+                .ignoresSafeArea(.container, edges: .vertical)
+        }
         .navigationSplitViewColumnWidth(200)
     }
 
