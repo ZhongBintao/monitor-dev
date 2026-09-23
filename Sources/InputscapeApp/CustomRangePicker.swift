@@ -171,7 +171,20 @@ struct CustomRangePicker: View {
         .background(ScrollSwiper { event in
             handleScrollEvent(event)
         }.frame(width: 0, height: 0))
-        .onAppear(perform: adoptExistingRange)
+        .onAppear {
+            adoptExistingRange()
+            // 诊断钩子：`INPUTSCAPE_PICKER_START=2026-08-03` 强制"已选开始、待选结束"
+            // 状态（不设结束），用于复现/验证开始日期的高亮渲染
+            if let startArg = ProcessInfo.processInfo.environment["INPUTSCAPE_PICKER_START"],
+               let start = Self.dateFromISO(startArg) {
+                startDay = start
+                endDay = nil
+                stage = .pickingEnd
+                startText = startArg
+                endText = ""
+                visibleMonth = Self.startOfMonth(start)
+            }
+        }
         .onChange(of: focusedField) { oldField, _ in
             // 失焦时把键入内容规范化（补零 / 回退）；聚焦不改变选期阶段
             if let oldField {
@@ -595,7 +608,10 @@ private struct MonthGridView: View, Equatable {
         Grid(horizontalSpacing: 0, verticalSpacing: 4) {
             ForEach(rows, id: \.self) { row in
                 GridRow {
-                    ForEach(row, id: \.self) { day in
+                    // 注意：id 必须用列下标——若用 Date?.self，周首/周尾的空占位格
+                    //（nil）会共享同一身份，ForEach 出现重复 id，相邻日期格
+                    // 渲染错乱（实测：端点标记残留、区间带断档）
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, day in
                         if let day {
                             dayCell(day)
                         } else {
