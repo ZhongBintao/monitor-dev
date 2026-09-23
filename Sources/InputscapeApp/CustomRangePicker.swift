@@ -1,11 +1,12 @@
 import SwiftUI
 import InputscapeKit
 
-/// 双指横扫手势流（phase + momentumPhase 归一上报）
+/// 双指横扫手势流（phase + momentumPhase 归一上报）；
+/// ended 携带事件流 EMA 估算的瞬时速度（pt/s），供快甩判定
 private enum ScrollGestureEvent {
     case began
     case changed(CGFloat)        // 内容方向的位移增量（点）
-    case ended
+    case ended(velocity: CGFloat)
     case momentumBegan
     case momentumChanged(CGFloat)
     case momentumEnded
@@ -56,9 +57,13 @@ struct CustomRangePicker: View {
     /// 日历面板宽度 = 弹层 320 - 左右 padding 16×2（常量，供阈值判定）
     private static let panelWidth: CGFloat = 288
     /// 翻页位移阈值（面板宽 1/6 ≈ 48pt，轻快短滑即可触发）
-    private static let pageTurnDistanceThreshold: CGFloat = panelWidth / 6
-    /// 轻扫翻页阈值：预测终点位移达到面板宽 2.4 倍分之…即快甩即翻（抗抖动：需与位移同向）
-    private static let flickPredictedThreshold: CGFloat = panelWidth / 2.4
+    private static let pageTurnDistanceThreshold: CGFloat = panelWidth / 9
+    /// 快甩判定：预测终点位移 ≥ 面板宽 1/4（72pt）且与位移同向
+    private static let flickPredictedThreshold: CGFloat = panelWidth / 4
+    /// 拖拽中途翻页：拖过面板 55% 立即翻页，不等松手
+    private static let midDragCommitRatio: CGFloat = 0.55
+    /// 双指路径快甩速度阈值（pt/s，事件流 EMA 估算）
+    private static let scrollVelocityThreshold: CGFloat = 500
 
     private static func startOfDay(_ date: Date) -> Date {
         Calendar.current.startOfDay(for: date)
@@ -336,7 +341,7 @@ struct CustomRangePicker: View {
     }
 
     private func turnPage(to target: Date) {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
             dragOffset = target > visibleMonth ? -Self.panelWidth : Self.panelWidth
         } completion: {
             // 无动画置换当前月：视觉无缝（相邻格内容与置换后一致）
@@ -349,18 +354,19 @@ struct CustomRangePicker: View {
         }
     }
 
-    /// 松手判定：位移 ≥ 面板宽 1/6（短滑即翻），或快甩（预测终点 ≥ 面板宽 2.4 分之…，
-    /// 且与位移同向）也翻页；都不满足 → 弹回原位。速度判定让短距快甩也能翻页，
-    /// 位移阈值 + 预测终点同向要求防轻微触碰 / 抖动误翻。
+    /// 松手判定：位移 ≥ 面板宽 1/9（32pt，短滑即翻），或快甩（预测终点 ≥ 面板宽 1/4
+    /// 且与位移同向）也翻页；都不满足 → 弹回原位。
     private func finishSwipe(dx: CGFloat, predictedEnd: CGFloat = 0, width: CGFloat) {
         if dx < 0, (abs(dx) >= Self.pageTurnDistanceThreshold || predictedEnd <= -Self.flickPredictedThreshold),
            let next = nextMonth {
+            gestureCommitted = true
             turnPage(to: next)
         } else if dx > 0, (abs(dx) >= Self.pageTurnDistanceThreshold || predictedEnd >= Self.flickPredictedThreshold),
                   let previous = previousMonth {
+            gestureCommitted = true
             turnPage(to: previous)
         } else {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { dragOffset = 0 }
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { dragOffset = 0 }
         }
     }
 
@@ -375,32 +381,47 @@ struct CustomRangePicker: View {
         case .changed(let delta):
             scrollEndWorkItem?.cancel()
             applyScrollDelta(delta)
-        case .ended:
-            if abs(dragOffset) >= Self.pageTurnDistanceThreshold, let target = swipeTarget() {
-                // 位移已达标：立即翻页，本手势流的动量不再重复翻页
+        case .ended(let velocity):
+            guard !gestureCommitted else { return }
+            // 快甩：松手瞬间速度达标立即翻页，不等动量
+            if abs(velocity) >= Self.scrollVelocityThreshold, let target = targetFor(direction: velocity) {
+                gestureCommitted = true
+                turnPage(to: target)
+            } else if abs(dragOffset) >= Self.pageTurnDistanceThreshold, let target = swipeTarget() {
+                // 位移已达标：立即翻页
                 gestureCommitted = true
                 turnPage(to: target)
             } else {
-                // 位移不足：短暂等待动量（轻扫惯性可以带过阈值）
+                // 都不达标：短暂等待动量（轻扫惯性可以带过阈值）
                 scheduleDeferredFinish()
             }
         case .momentumBegan:
             scrollEndWorkItem?.cancel()
         case .momentumChanged(let delta):
             guard !gestureCommitted else { return }
-            applyScrollDelta(delta * 0.5) // 惯性衰减
-            if abs(dragOffset) >= Self.pageTurnDistanceThreshold, let target = swipeTarget() {
+            applyScrollDelta(delta) // 动量满额延续，轻扫惯性自然带过阈值
+            if let target = swipeTarget(), abs(dragOffset) >= Self.pageTurnDistanceThreshold {
                 gestureCommitted = true
                 turnPage(to: target)
             }
         case .momentumEnded:
-            guard !gestureCommitted else { return }
-            finishSwipe(dx: dragOffset, width: Self.panelWidth)
+            // 手势流结束：复位标志（下次手势 .began 重新判定），按位移收尾
+            gestureCommitted = false
+            if let target = swipeTarget(), abs(dragOffset) >= Self.pageTurnDistanceThreshold {
+                gestureCommitted = true
+                turnPage(to: target)
+            } else {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { dragOffset = 0 }
+            }
         }
     }
 
     private func swipeTarget() -> Date? {
         dragOffset < 0 ? nextMonth : (dragOffset > 0 ? previousMonth : nil)
+    }
+
+    private func targetFor(direction: CGFloat) -> Date? {
+        direction < 0 ? nextMonth : previousMonth
     }
 
     /// 应用横扫位移增量；边界（下月超出当前月）橡皮筋阻尼
@@ -425,14 +446,22 @@ struct CustomRangePicker: View {
     private func dragGesture(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { value in
+                guard !gestureCommitted else { return } // 中途已翻页，忽略余量拖动
                 var dx = value.translation.width
                 if dx < 0 && nextMonth == nil {
                     // 已是当前月还往左拖：橡皮筋阻尼
                     dx *= 0.25
                 }
                 dragOffset = dx
+                // 激进：拖过面板 55% 立即翻页，不等松手
+                if let target = swipeTarget(), abs(dx) >= width * Self.midDragCommitRatio {
+                    gestureCommitted = true
+                    turnPage(to: target)
+                }
             }
             .onEnded { value in
+                defer { gestureCommitted = false } // 手势结束复位，下一次重新判定
+                guard !gestureCommitted else { return }
                 finishSwipe(dx: value.translation.width,
                             predictedEnd: value.predictedEndTranslation.width,
                             width: width)
@@ -655,15 +684,18 @@ private struct MonthGridView: View, Equatable {
 
 /// 双指横扫连续跟手：本地 scrollWheel 监听（只响应本弹层窗口），
 /// 利用事件自带 phase（began/changed/ended）+ momentumPhase（动量）
-/// 上报完整手势流；动量阶段的位移增量以 0.5 衰减驱动 pager——
-/// 轻扫的惯性可以自然带过翻页阈值。deltaX 直接是内容方向的
-/// 位移增量，pager 按内容移动方向映射，与自然滚动设置无关。
+/// 上报完整手势流；松手时上报事件流 EMA 估算的速度供快甩判定；
+/// 动量阶段的位移增量满额驱动 pager——轻扫的惯性可以自然带过阈值。
+/// deltaX 直接是内容方向的位移增量，与自然滚动设置无关。
 private struct ScrollSwiper: NSViewRepresentable {
     let onEvent: (ScrollGestureEvent) -> Void
 
     final class CaptureView: NSView {
         var onEvent: ((ScrollGestureEvent) -> Void)?
         private var monitor: Any?
+        /// 事件流瞬时速度的 EMA（pt/s），松手时上报供快甩判定
+        private var velocityEMA: CGFloat = 0
+        private var lastTimestamp: TimeInterval = 0
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -678,13 +710,18 @@ private struct ScrollSwiper: NSViewRepresentable {
                 let scale: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 12
                 let delta = CGFloat(event.deltaX) * scale
 
+                // 速度估算：EMA 平滑相邻事件的瞬时速度（点/秒）
+                let dt = max(0.001, event.timestamp - lastTimestamp)
+                lastTimestamp = event.timestamp
+                velocityEMA = velocityEMA * 0.6 + (delta / CGFloat(dt)) * 0.4
+
                 // 动量阶段（手指已离盘）：上报给 pager 做惯性延续判定
                 if !event.momentumPhase.isEmpty {
                     switch event.momentumPhase {
                     case .began:
                         onEvent?(.momentumBegan)
                     case .changed:
-                        guard abs(event.deltaX) >= abs(event.deltaY), delta != 0 else { return event }
+                        guard delta != 0 else { return event }
                         onEvent?(.momentumChanged(delta))
                     case .ended:
                         onEvent?(.momentumEnded)
@@ -697,6 +734,7 @@ private struct ScrollSwiper: NSViewRepresentable {
                 // 常规手势阶段（手指在盘上）
                 switch event.phase {
                 case .began:
+                    velocityEMA = 0
                     onEvent?(.began)
                 case .changed:
                     // 不按轴向丢事件：纵向滚动 deltaX≈0 本身无位移，
@@ -704,7 +742,7 @@ private struct ScrollSwiper: NSViewRepresentable {
                     guard delta != 0 else { return event }
                     onEvent?(.changed(delta))
                 case .ended:
-                    onEvent?(.ended)
+                    onEvent?(.ended(velocity: velocityEMA))
                 default:
                     break
                 }
