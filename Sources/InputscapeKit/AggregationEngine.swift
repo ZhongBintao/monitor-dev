@@ -61,6 +61,36 @@ public final class AggregationEngine: @unchecked Sendable {
         bumpBucket(at: t, keyboard: 0, trackpad: 1)
     }
 
+    // MARK: - Force Touch 与点击压力
+
+    /// Force Touch 触控板能力开关（设置页「设备支持 Force Touch」联动）。
+    /// 关闭时不采集点击压力分档，深按（forceTouch）也不计数——开关真正生效。
+    private var forceTouchEnabled = true
+
+    public func setForceTouchEnabled(_ enabled: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        forceTouchEnabled = enabled
+    }
+
+    public func isForceTouchEnabled() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return forceTouchEnabled
+    }
+
+    /// 记一次点击压力样本（leftMouseDown 的 kCGMouseEventPressure，0–1+）。
+    /// 按 PressureTier 阈值分轻/中/深三档累计直方图并累加压力和（毫级整数）。
+    /// 压力分档是点击的派生维度：不进 5 分钟桶、时段分布与活跃输入段
+    /// （与组合键同样的口径），深按档样本对应的点击已计入 forceTouch 类别。
+    public func ingestPressure(_ pressure: Double, at date: Date? = nil) {
+        lock.lock(); defer { lock.unlock() }
+        guard forceTouchEnabled else { return }
+        let t = date ?? now()
+        rolloverIfNeeded(at: t)
+        let tier = PressureTier.classify(pressure)
+        record.pressureTierCounts[tier.rawValue, default: 0] += 1
+        record.pressureSumMilli += Int((pressure * 1000).rounded())
+    }
+
     // MARK: - 输入段（活跃输入时长）
 
     private func markActivity(at t: Date) {
@@ -201,6 +231,8 @@ public final class AggregationEngine: @unchecked Sendable {
         var comboCounts: [String: Int] = [:]
         var trackpadCounts: [String: Int] = [:]
         var hourly: [String: [Int]] = [:]
+        var pressureTierCounts: [String: Int] = [:]
+        var pressureSumMilli = 0
         var activeSeconds = 0.0
 
         for day in historical {
@@ -211,6 +243,8 @@ public final class AggregationEngine: @unchecked Sendable {
                 let dst = hourly[k] ?? Array(repeating: 0, count: 24)
                 hourly[k] = zip(dst, series).map { $0 + $1 }
             }
+            for (k, v) in day.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
+            pressureSumMilli += day.pressureSumMilli
             activeSeconds += day.activeSeconds
         }
         for (k, v) in todayMerged.keyCounts { keyCounts[k, default: 0] += v }
@@ -220,6 +254,8 @@ public final class AggregationEngine: @unchecked Sendable {
             let dst = hourly[k] ?? Array(repeating: 0, count: 24)
             hourly[k] = zip(dst, series).map { $0 + $1 }
         }
+        for (k, v) in todayMerged.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
+        pressureSumMilli += todayMerged.pressureSumMilli
         activeSeconds += todayMerged.activeSeconds
 
         // 桶：历史日按星期内聚合意义有限，快照桶 = 最近 dayCount 天逐桶求和。
@@ -246,6 +282,10 @@ public final class AggregationEngine: @unchecked Sendable {
         var hourlyKind: [TrackpadOperationKind: [Int]] = [:]
         for kind in TrackpadOperationKind.allCases {
             hourlyKind[kind] = hourly[kind.rawValue] ?? Array(repeating: 0, count: 24)
+        }
+        var pressureKindCounts: [PressureTier: Int] = [:]
+        for tier in PressureTier.allCases {
+            pressureKindCounts[tier] = pressureTierCounts[tier.rawValue] ?? 0
         }
 
         // 按日序列（旧 → 新），今天在内；零数据日不出现（保持趋势图空态语义）。
@@ -279,7 +319,9 @@ public final class AggregationEngine: @unchecked Sendable {
             trackpadCounts: kindCounts,
             buckets: mergedBuckets,
             hourlyByOp: hourlyKind,
-            daySeries: series
+            daySeries: series,
+            pressureTierCounts: pressureKindCounts,
+            pressureSumMilli: pressureSumMilli
         )
     }
 
@@ -349,6 +391,8 @@ public final class AggregationEngine: @unchecked Sendable {
         var comboCounts: [String: Int] = [:]
         var trackpadCounts: [String: Int] = [:]
         var hourly: [String: [Int]] = [:]
+        var pressureTierCounts: [String: Int] = [:]
+        var pressureSumMilli = 0
         var bucketMap: [Int: TimeBucket] = [:]
         var activeSeconds = 0.0
 
@@ -360,6 +404,8 @@ public final class AggregationEngine: @unchecked Sendable {
                 let dst = hourly[k] ?? Array(repeating: 0, count: 24)
                 hourly[k] = zip(dst, series).map { $0 + $1 }
             }
+            for (k, v) in day.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
+            pressureSumMilli += day.pressureSumMilli
             for b in day.buckets {
                 if var existing = bucketMap[b.index] {
                     existing.keyboard += b.keyboard
@@ -380,6 +426,10 @@ public final class AggregationEngine: @unchecked Sendable {
         for kind in TrackpadOperationKind.allCases {
             hourlyKind[kind] = hourly[kind.rawValue] ?? Array(repeating: 0, count: 24)
         }
+        var pressureKindCounts: [PressureTier: Int] = [:]
+        for tier in PressureTier.allCases {
+            pressureKindCounts[tier] = pressureTierCounts[tier.rawValue] ?? 0
+        }
 
         // 按日序列（旧 → 新），零数据日不出现。
         let series = Self.dayRange(start, end, calendar: calendar)
@@ -399,7 +449,9 @@ public final class AggregationEngine: @unchecked Sendable {
             trackpadCounts: kindCounts,
             buckets: bucketMap.values.sorted { $0.index < $1.index },
             hourlyByOp: hourlyKind,
-            daySeries: series
+            daySeries: series,
+            pressureTierCounts: pressureKindCounts,
+            pressureSumMilli: pressureSumMilli
         )
     }
 }

@@ -28,27 +28,80 @@ public enum PeriodScope: String, CaseIterable, Sendable {
 // MARK: - 触控板操作类别
 
 /// 触控板操作类别（聚合口径，不含坐标与轨迹）。
+/// 2026-09 触控板增强：缩放按方向拆分（zoomIn/zoomOut/smartZoom），
+/// 新增旋转、横向滚动与滚动会话；`zoom` 保留为历史口径（仅旧数据出现）。
 public enum TrackpadOperationKind: String, CaseIterable, Codable, Sendable {
     case click          // 单击 / 双击等按压
-    case scrollUp       // 上滚
+    case scrollUp       // 上滚（手指方向语义）
     case scrollDown     // 下滚
-    case zoom           // 捏合缩放（含智能缩放）
-    case swipe          // 双指 / 三指滑动导航
+    case scrollHorizontal // 横向滚动（deltaX ≠ 0，不区分左右）
+    case scrollSession  // 滚动会话：一次手指接触的滚动（phase began→ended）
+    case zoomIn         // 放大（张合手势净方向，一次手势计 1 次）
+    case zoomOut        // 缩小
+    case smartZoom      // 智能缩放（双指双击）
+    case rotateCW       // 顺时针旋转（一次手势计 1 次）
+    case rotateCCW      // 逆时针旋转
+    case swipe          // 三指轻扫导航（双指轻扫在系统内表现为滚动）
     case forceTouch     // 深按（设备支持时）
+    case zoom           // 历史口径：方向拆分前的缩放（含智能缩放），不再新增
 
     public var label: String {
         switch self {
         case .click: return "点击"
         case .scrollUp: return "上滚"
         case .scrollDown: return "下滚"
-        case .zoom: return "缩放"
+        case .scrollHorizontal: return "横向滚动"
+        case .scrollSession: return "滚动会话"
+        case .zoomIn: return "放大"
+        case .zoomOut: return "缩小"
+        case .smartZoom: return "智能缩放"
+        case .rotateCW: return "顺时针旋转"
+        case .rotateCCW: return "逆时针旋转"
         case .swipe: return "滑动"
         case .forceTouch: return "Force Touch"
+        case .zoom: return "缩放（历史）"
         }
     }
 
     /// 是否属于滚动类（构成里上下滚合并展示时用）。
-    public var isScroll: Bool { self == .scrollUp || self == .scrollDown }
+    public var isScroll: Bool {
+        switch self {
+        case .scrollUp, .scrollDown, .scrollHorizontal, .scrollSession:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+// MARK: - 点击压力分档
+
+/// 点击压力三档（Force Touch 触控板 leftMouseDown 的 kCGMouseEventPressure）。
+/// 阈值为待真机标定的经验值（提案口径 0.4 / 0.9，可在真机验证后调整常量）；
+/// 深按档阈值与 Force Touch 计数联动——pressure ≥ deepThreshold 即深按。
+public enum PressureTier: String, CaseIterable, Codable, Sendable {
+    case light
+    case medium
+    case deep
+
+    /// 轻 → 中分界：pressure ≥ 0.4 视为中按。
+    public static let mediumThreshold: Double = 0.4
+    /// 中 → 深分界：pressure ≥ 0.9 视为深按（Force Touch 联动阈值）。
+    public static let deepThreshold: Double = 0.9
+
+    public static func classify(_ pressure: Double) -> PressureTier {
+        if pressure >= deepThreshold { return .deep }
+        if pressure >= mediumThreshold { return .medium }
+        return .light
+    }
+
+    public var label: String {
+        switch self {
+        case .light: return "轻按"
+        case .medium: return "中按"
+        case .deep: return "深按"
+        }
+    }
 }
 
 // MARK: - 时间桶（5 分钟）
@@ -97,6 +150,11 @@ public struct DailyRecord: Codable, Sendable, Equatable {
     public var hourlyByOp: [String: [Int]]
     /// 活跃输入秒数（输入段模型：连续 60 秒无事件即结束当前段）。
     public var activeSeconds: Double
+    /// 点击压力分档计数（PressureTier rawValue → 次数）。
+    /// 点击的派生维度：不进 5 分钟桶、时段分布与活跃输入段。
+    public var pressureTierCounts: [String: Int]
+    /// 点击压力累计（pressure × 1000 的整数和），用于平均压力展示。
+    public var pressureSumMilli: Int
 
     public init(date: String,
                 keyCounts: [String: Int] = [:],
@@ -104,7 +162,9 @@ public struct DailyRecord: Codable, Sendable, Equatable {
                 comboCounts: [String: Int] = [:],
                 buckets: [TimeBucket] = [],
                 hourlyByOp: [String: [Int]] = [:],
-                activeSeconds: Double = 0) {
+                activeSeconds: Double = 0,
+                pressureTierCounts: [String: Int] = [:],
+                pressureSumMilli: Int = 0) {
         self.date = date
         self.keyCounts = keyCounts
         self.trackpadCounts = trackpadCounts
@@ -112,6 +172,24 @@ public struct DailyRecord: Codable, Sendable, Equatable {
         self.buckets = buckets
         self.hourlyByOp = hourlyByOp
         self.activeSeconds = activeSeconds
+        self.pressureTierCounts = pressureTierCounts
+        self.pressureSumMilli = pressureSumMilli
+    }
+
+    /// 自定义解码：pressureTierCounts / pressureSumMilli 为 2026-09 增量字段，
+    /// 旧落盘 JSON 不含它们，用 decodeIfPresent 容缺（默认为空 / 0）。
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        date = try container.decode(String.self, forKey: .date)
+        keyCounts = try container.decode([String: Int].self, forKey: .keyCounts)
+        trackpadCounts = try container.decode([String: Int].self, forKey: .trackpadCounts)
+        comboCounts = try container.decode([String: Int].self, forKey: .comboCounts)
+        buckets = try container.decode([TimeBucket].self, forKey: .buckets)
+        hourlyByOp = try container.decode([String: [Int]].self, forKey: .hourlyByOp)
+        activeSeconds = try container.decode(Double.self, forKey: .activeSeconds)
+        pressureTierCounts = try container.decodeIfPresent([String: Int].self,
+                                                           forKey: .pressureTierCounts) ?? [:]
+        pressureSumMilli = try container.decodeIfPresent(Int.self, forKey: .pressureSumMilli) ?? 0
     }
 
     public func trackpadCount(_ kind: TrackpadOperationKind) -> Int {
@@ -126,9 +204,26 @@ public struct DailyRecord: Codable, Sendable, Equatable {
         keyCounts.values.reduce(0, +)
     }
 
+    /// 压力样本总数（三档之和）。
+    public var pressureSampleTotal: Int {
+        pressureTierCounts.values.reduce(0, +)
+    }
+
+    public func pressureCount(_ tier: PressureTier) -> Int {
+        pressureTierCounts[tier.rawValue] ?? 0
+    }
+
+    /// 平均点击压力（无样本时为 nil）。
+    public var pressureAverage: Double? {
+        pressureSampleTotal > 0
+            ? Double(pressureSumMilli) / Double(pressureSampleTotal) / 1000
+            : nil
+    }
+
     /// 允许持久化的顶层字段（隐私不变量测试用）。
     public static let allowedEncodedKeys: Set<String> = [
-        "date", "keyCounts", "trackpadCounts", "comboCounts", "buckets", "hourlyByOp", "activeSeconds"
+        "date", "keyCounts", "trackpadCounts", "comboCounts", "buckets", "hourlyByOp", "activeSeconds",
+        "pressureTierCounts", "pressureSumMilli"
     ]
 }
 
@@ -230,13 +325,19 @@ public struct AggregateSnapshot: Sendable, Equatable {
     public var hourlyByOp: [TrackpadOperationKind: [Int]]
     /// 按日序列（旧 → 新）。
     public var daySeries: [DaySeriesPoint]
+    /// 点击压力分档 → 次数（多日合并）。
+    public var pressureTierCounts: [PressureTier: Int]
+    /// 点击压力累计（pressure × 1000 整数和，多日合并）。
+    public var pressureSumMilli: Int
 
     public init(scope: PeriodScope, dayCount: Int, keyPresses: Int, trackpadOps: Int,
                 activeSeconds: Double, keyCounts: [String: Int],
                 comboCounts: [String: Int] = [:],
                 trackpadCounts: [TrackpadOperationKind: Int],
                 buckets: [TimeBucket], hourlyByOp: [TrackpadOperationKind: [Int]],
-                daySeries: [DaySeriesPoint]) {
+                daySeries: [DaySeriesPoint],
+                pressureTierCounts: [PressureTier: Int] = [:],
+                pressureSumMilli: Int = 0) {
         self.scope = scope
         self.dayCount = dayCount
         self.keyPresses = keyPresses
@@ -248,6 +349,8 @@ public struct AggregateSnapshot: Sendable, Equatable {
         self.buckets = buckets
         self.hourlyByOp = hourlyByOp
         self.daySeries = daySeries
+        self.pressureTierCounts = pressureTierCounts
+        self.pressureSumMilli = pressureSumMilli
     }
 
     public static func empty(_ scope: PeriodScope) -> AggregateSnapshot {
@@ -279,5 +382,26 @@ public struct AggregateSnapshot: Sendable, Equatable {
         let total = entries.reduce(0) { $0 + $1.count }
         guard total > 0 else { return [] }
         return entries.map { ($0.kind, $0.count, Double($0.count) / Double(total)) }
+    }
+
+    /// 压力样本总数（多日合并）。
+    public var pressureSamples: Int {
+        pressureTierCounts.values.reduce(0, +)
+    }
+
+    public func pressureCount(_ tier: PressureTier) -> Int {
+        pressureTierCounts[tier] ?? 0
+    }
+
+    /// 平均点击压力（多日合并；无样本时为 nil）。
+    public var pressureAverage: Double? {
+        pressureSamples > 0
+            ? Double(pressureSumMilli) / Double(pressureSamples) / 1000
+            : nil
+    }
+
+    /// 深按样本数（与 Force Touch 同一阈值联动，等于深按档计数）。
+    public var pressureDeepCount: Int {
+        pressureCount(.deep)
     }
 }

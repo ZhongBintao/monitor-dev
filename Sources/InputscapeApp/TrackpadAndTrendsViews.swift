@@ -15,7 +15,12 @@ struct TrackpadOpsView: View {
                     compositionCard
                     hourlyCard
                 }
-                rankingCard
+                HStack(alignment: .top, spacing: 16) {
+                    if model.deviceProfile.supportsForceTouch {
+                        pressureCard
+                    }
+                    rankingCard
+                }
             }
             .padding(20)
         }
@@ -25,7 +30,7 @@ struct TrackpadOpsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("触控板操作构成")
                 .font(.system(size: 28, weight: .bold)).foregroundColor(Theme.navy)
-            Text("点击、滚动、缩放、滑动与 Force Touch 的聚合构成。")
+            Text("点击、滚动、缩放、旋转、滑动与 Force Touch 的聚合构成。")
                 .font(.system(size: 14)).foregroundColor(Theme.secondary)
             StateBanner(status: model.status,
                         permission: model.permission,
@@ -42,13 +47,12 @@ struct TrackpadOpsView: View {
                 Text("操作构成").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
                 if snapshot.trackpadOps == 0 {
                     EmptyStateView(title: "还没有触控操作记录",
-                                   detail: "开始观察后，这里会展示点击、滚动、缩放、滑动等操作的构成。")
+                                   detail: "开始观察后，这里会展示点击、滚动、缩放、旋转、滑动等操作的构成。")
                     .frame(height: 160)
                 } else {
-                    ForEach(TrackpadOperationKind.allCases, id: \.self) { kind in
-                        let count = snapshot.trackpadCounts[kind] ?? 0
-                        let fraction = snapshot.trackpadOps > 0 ? Double(count) / Double(snapshot.trackpadOps) : 0
-                        row(kind: kind, count: count, fraction: fraction)
+                    // 类别较多（13 类），只展示有数据的类别；占比按有数据部分归一。
+                    ForEach(snapshot.trackpadRanking, id: \.kind) { entry in
+                        row(kind: entry.kind, count: entry.count, fraction: entry.fraction)
                     }
                 }
             }
@@ -162,6 +166,89 @@ struct TrackpadOpsView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// 压力分布卡（提案 §三短期项 2）：三档占比条 + 平均压力 + 深按次数。
+    /// 设备不支持 Force Touch 时整卡隐藏（由 body 中的条件控制），
+    /// 设置开关从此真正生效。
+    private var pressureCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 6) {
+                    Text("压力分布").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
+                    HelpMarker(text: "点击压力按轻/中/深三档统计（分界 0.4 / 0.9，深按档与 Force Touch 计数联动）。只保存分档计数与平均压力，不保存压力原始值或轨迹。设备不支持 Force Touch 时可在设置中关闭采集。")
+                    Spacer()
+                }
+                if snapshot.pressureSamples == 0 {
+                    EmptyStateView(title: "暂无压力数据",
+                                   detail: "观察进行中时会按每次点击的压力累计三档分布。")
+                        .frame(height: 120)
+                } else {
+                    ForEach(PressureTier.allCases, id: \.self) { tier in
+                        pressureRow(tier: tier,
+                                    count: snapshot.pressureCount(tier),
+                                    fraction: snapshot.pressureSamples > 0
+                                        ? Double(snapshot.pressureCount(tier)) / Double(snapshot.pressureSamples)
+                                        : 0)
+                    }
+                    HStack {
+                        Text("平均点击压力")
+                            .font(.system(size: 13)).foregroundColor(Theme.secondary)
+                        Spacer()
+                        Text(averagePressureText)
+                            .font(.system(size: 14, weight: .bold)).foregroundColor(Theme.navy)
+                            .monospacedDigit()
+                    }
+                    HStack {
+                        Text("深按（Force Touch）")
+                            .font(.system(size: 13)).foregroundColor(Theme.secondary)
+                        Spacer()
+                        Text("\(formatCount(snapshot.pressureDeepCount)) 次")
+                            .font(.system(size: 14, weight: .bold)).foregroundColor(Theme.coral)
+                    }
+                }
+            }
+        }
+    }
+
+    private var averagePressureText: String {
+        guard let average = snapshot.pressureAverage else { return "—" }
+        return String(format: "%.2f", average)
+    }
+
+    private func pressureRow(tier: PressureTier, count: Int, fraction: Double) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Circle().fill(pressureColor(tier))
+                    .frame(width: 8, height: 8)
+                Text(tier.label).font(.system(size: 13)).foregroundColor(Theme.navy)
+                Spacer()
+                Text("\(formatCount(count)) 次 · \(Int((fraction * 100).rounded()))%")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.coralSoft)
+                    if count > 0 {
+                        Capsule().fill(pressureColor(tier))
+                            .frame(width: max(8, geo.size.width * fraction))
+                    }
+                }
+            }
+            .frame(height: 8)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(tier.label) \(count) 次，占比 \(Int((fraction * 100).rounded()))%")
+    }
+
+    /// 三档同色系深浅区分；同时以数字与文字呈现（不只依赖颜色）。
+    private func pressureColor(_ tier: PressureTier) -> Color {
+        switch tier {
+        case .light: return Theme.coral.opacity(0.45)
+        case .medium: return Theme.coral.opacity(0.7)
+        case .deep: return Theme.coral
         }
     }
 }

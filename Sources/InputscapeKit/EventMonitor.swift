@@ -50,6 +50,20 @@ public enum PermissionCenter {
 /// - flagsChanged：command / control / option / shift / fn / caps 单独按下；
 /// - systemDefined(subtype 8)：默认设置下物理 F1/F2/F7–F12 的媒体事件
 ///   （亮度 / 播放控制 / 音量），映射回物理键位 ID 统计。
+///
+/// 触控板手势覆盖（2026-09 触控板增强，参考 SO #1383528 / rift 的公开路线）：
+/// - tap 掩码扩到全事件（kCGEventMaskForAllEvents，listen-only）——
+///   系统不向 NSEvent 全局监听投递手势事件，但对 CGEventTap 会按原始
+///   数值类型投递（CGEventType 无手势命名 case，与 NSEvent 手势类型
+///   一一对应：rotate 18 / beginGesture 19 / endGesture 20 / gesture 29 /
+///   magnify 30 / swipe 31 / smartMagnify 32 / pressure 34）；
+/// - 回调内按 rawValue 过滤后经 NSEvent(cgEvent:) 转换，非手势事件
+///   只做一次集合查找（纳秒级），all-events 频率开销可忽略；
+/// - 缩放 / 旋转按 GestureSessionTracker 在手势会话结束时结算
+///   （一次手势计 1 次）；滚动会话用 scrollWheel 自带 phase 判定
+///   （began→ended 一次接触计 1 次，动量与滚轮鼠标不计）；
+/// - 点击压力（kCGMouseEventPressure）按轻/中/深三档统计，
+///   深按档阈值与 Force Touch 计数联动。
 public final class EventMonitor: @unchecked Sendable {
 
     public struct Handlers: Sendable {
@@ -59,42 +73,66 @@ public final class EventMonitor: @unchecked Sendable {
         public var onCombo: (@Sendable (String, String) -> Void)? = nil
         /// 键盘释放（实时页"按下中 → 已松开"即时反馈）。
         public var onKeyUp: (@Sendable (String) -> Void)? = nil
-        public var onScroll: (@Sendable (Double) -> Void)? = nil        // deltaY 符号：>0 上滚
+        /// 垂直滚动（deltaY 符号 = 内容移动方向：>0 内容下移）。
+        public var onScroll: (@Sendable (Double) -> Void)? = nil
+        /// 横向滚动（deltaX 符号 = 内容移动方向：>0 内容右移）。
+        public var onScrollHorizontal: (@Sendable (Double) -> Void)? = nil
+        /// 一次触控板滚动会话（手指接触滚动 → 抬起，scrollWheel phase 判定）。
+        public var onScrollSession: (@Sendable () -> Void)? = nil
         public var onClick: (@Sendable () -> Void)? = nil
         public var onForceTouch: (@Sendable () -> Void)? = nil
-        public var onZoom: (@Sendable () -> Void)? = nil
+        /// leftMouseDown 点击压力（0–1+），按轻/中/深三档入直方图。
+        public var onPressure: (@Sendable (Double) -> Void)? = nil
+        /// 放大（手势会话结束结算，一次手势计 1 次）。
+        public var onZoomIn: (@Sendable () -> Void)? = nil
+        /// 缩小（同上）。
+        public var onZoomOut: (@Sendable () -> Void)? = nil
+        /// 智能缩放（双指双击）。
+        public var onSmartZoom: (@Sendable () -> Void)? = nil
+        /// 旋转手势（clockwise = 顺时针；符号约定待真机标定）。
+        public var onRotate: (@Sendable (_ clockwise: Bool) -> Void)? = nil
         public var onSwipe: (@Sendable () -> Void)? = nil
+        /// 放大手势进行中（实时页方向即时反馈；isZoomIn = true 放大）。
+        public var onMagnifyLive: (@Sendable (_ isZoomIn: Bool) -> Void)? = nil
         public var onGestureStart: (@Sendable () -> Void)? = nil
-        public var onMagnifyActive: (@Sendable () -> Void)? = nil
         public var onGestureEnd: (@Sendable () -> Void)? = nil
 
         public init(onKey: (@Sendable (String) -> Void)? = nil,
                     onCombo: (@Sendable (String, String) -> Void)? = nil,
                     onKeyUp: (@Sendable (String) -> Void)? = nil,
                     onScroll: (@Sendable (Double) -> Void)? = nil,
+                    onScrollHorizontal: (@Sendable (Double) -> Void)? = nil,
+                    onScrollSession: (@Sendable () -> Void)? = nil,
                     onClick: (@Sendable () -> Void)? = nil,
                     onForceTouch: (@Sendable () -> Void)? = nil,
-                    onZoom: (@Sendable () -> Void)? = nil,
+                    onPressure: (@Sendable (Double) -> Void)? = nil,
+                    onZoomIn: (@Sendable () -> Void)? = nil,
+                    onZoomOut: (@Sendable () -> Void)? = nil,
+                    onSmartZoom: (@Sendable () -> Void)? = nil,
+                    onRotate: (@Sendable (_ clockwise: Bool) -> Void)? = nil,
                     onSwipe: (@Sendable () -> Void)? = nil,
+                    onMagnifyLive: (@Sendable (_ isZoomIn: Bool) -> Void)? = nil,
                     onGestureStart: (@Sendable () -> Void)? = nil,
-                    onMagnifyActive: (@Sendable () -> Void)? = nil,
                     onGestureEnd: (@Sendable () -> Void)? = nil) {
             self.onKey = onKey
             self.onCombo = onCombo
             self.onKeyUp = onKeyUp
             self.onScroll = onScroll
+            self.onScrollHorizontal = onScrollHorizontal
+            self.onScrollSession = onScrollSession
             self.onClick = onClick
             self.onForceTouch = onForceTouch
-            self.onZoom = onZoom
+            self.onPressure = onPressure
+            self.onZoomIn = onZoomIn
+            self.onZoomOut = onZoomOut
+            self.onSmartZoom = onSmartZoom
+            self.onRotate = onRotate
             self.onSwipe = onSwipe
+            self.onMagnifyLive = onMagnifyLive
             self.onGestureStart = onGestureStart
-            self.onMagnifyActive = onMagnifyActive
             self.onGestureEnd = onGestureEnd
         }
     }
-
-    /// Force Touch 判定阈值（kCGMouseEventPressure > 1.0 视为深按；经验值）。
-    public static let forceTouchPressureThreshold: Double = 1.5
 
     /// 组合键去抖：同一和弦在窗口内视为按键重复，不重复计数。
     public static let comboDebounceInterval: TimeInterval = 0.15
@@ -102,9 +140,11 @@ public final class EventMonitor: @unchecked Sendable {
     // MARK: - 事件探针（诊断用）
 
     /// 环境变量 INPUTSCAPE_DEBUG_EVENTS=1 时，把 tap 看到的 keyDown 键码
-    /// （含未映射）与全部 systemDefined 事件（含 subtype ≠ 8）追加到
-    /// /tmp/inputscape-events.log，用于排查特殊功能键（F3/F5/F6 等）
-    /// 的事件投递形态。只记录键码与事件字段，不记录字符内容。
+    /// （含未映射）、全部 systemDefined 事件（含 subtype ≠ 8）与手势事件
+    /// （magnify / rotate / pressure 的数值）追加到 /tmp/inputscape-events.log，
+    /// 用于排查特殊功能键投递形态，兼做手势 / 压力事件的全局可达性探针
+    /// （提案 §三：真机验证 .pressure 是否经 tap 全局投递）。
+    /// 只记录事件字段数值，不记录字符内容或坐标。
     private static let debugEvents =
         ProcessInfo.processInfo.environment["INPUTSCAPE_DEBUG_EVENTS"] == "1"
     private static let debugLogURL = URL(fileURLWithPath: "/tmp/inputscape-events.log")
@@ -124,14 +164,26 @@ public final class EventMonitor: @unchecked Sendable {
         }
     }
 
+    /// CGEventType 无手势事件的命名 case：手势以原始数值类型经 tap 投递，
+    /// 与 NSEvent 手势类型的 rawValue 一一对应（见 AppKit NSEvent.h
+    /// NSEventType 枚举与类注释）。过滤集用 NSEvent 枚举运行时取值构造，
+    /// 避免硬编码出错。
+    private static let gestureEventRawValues: Set<Int> = {
+        let types: [NSEvent.EventType] = [.gesture, .magnify, .swipe, .rotate,
+                                          .beginGesture, .endGesture,
+                                          .smartMagnify, .pressure]
+        return Set(types.map { Int($0.rawValue) })
+    }()
+
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var keepAliveTimer: Timer?
-    private var monitors: [NSObjectProtocol] = []
     private let handlers: Handlers
     private let stateLock = NSLock()
-    private var gestureActive = false
-    private var magnifySeenInGesture = false
+    /// 当前手势会话的方向判定器（beginGesture 打开、endGesture 结算）。
+    private var gestureTracker: GestureSessionTracker?
+    /// 进行中的滚动会话（scrollWheel phase began → ended）。
+    private var scrollSessionOpen = false
     private var lastFlags: CGEventFlags = []
     private var capsLockPressed = false
     private var lastComboID: String?
@@ -153,14 +205,11 @@ public final class EventMonitor: @unchecked Sendable {
         stateLock.lock(); defer { stateLock.unlock() }
         guard !isRunning else { return true }
 
-        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
-            | (1 << CGEventType.keyUp.rawValue)
-            | (1 << CGEventType.flagsChanged.rawValue)
-            | (1 << CGEventType.leftMouseDown.rawValue)
-            | (1 << CGEventType.rightMouseDown.rawValue)
-            | (1 << CGEventType.otherMouseDown.rawValue)
-            | (1 << CGEventType.scrollWheel.rawValue)
-            | (1 << 14) // kCGEventSystemDefined：媒体键（亮度 / 播放 / 音量）
+        // 全事件掩码（kCGEventMaskForAllEvents，listen-only）：手势事件
+        // （缩放 / 旋转 / 智能缩放 / 轻扫 / 压力）没有 CGEventType 命名 case，
+        // 只能全事件监听后在回调内按 rawValue 过滤（见类注释）。
+        // 回调对非手势事件只做一次 switch + 集合查找，开销纳秒级。
+        let mask: CGEventMask = ~0
 
         let callback: CGEventTapCallBack = { proxy, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
@@ -202,12 +251,6 @@ public final class EventMonitor: @unchecked Sendable {
         RunLoop.main.add(timer, forMode: .common)
         self.keepAliveTimer = timer
 
-        // 手势事件走 NSEvent 全局监听（公开接口；部分手势系统层面不投递全局监听，
-        // 此时缩放 / 滑动计数保持为 0，属公开接口已知边界）。
-        DispatchQueue.main.async { [weak self] in
-            self?.installGestureMonitors()
-        }
-
         isRunning = true
         return true
     }
@@ -225,25 +268,7 @@ public final class EventMonitor: @unchecked Sendable {
         tap = nil
         runLoopSource = nil
         keepAliveTimer = nil
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            for m in self.monitors {
-                NSEvent.removeMonitor(m)
-            }
-            self.monitors.removeAll()
-        }
         isRunning = false
-    }
-
-    private func installGestureMonitors() {
-        let gestureMask: NSEvent.EventTypeMask = [.gesture, .magnify, .smartMagnify, .swipe,
-                                                  .beginGesture, .endGesture]
-        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: gestureMask,
-                                                           handler: { [weak self] event in
-            self?.handleGestureEvent(event)
-        }) as? NSObjectProtocol {
-            monitors.append(monitor)
-        }
     }
 
     // MARK: - 修饰键位 → 事件标志位
@@ -347,18 +372,24 @@ public final class EventMonitor: @unchecked Sendable {
             }
 
         case .scrollWheel:
-            let delta = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
-            if delta != 0 { handlers.onScroll?(delta) }
+            handleScrollWheel(event)
 
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            let pressure = event.getDoubleValueField(.mouseEventPressure)
-            if type == .leftMouseDown, pressure >= Self.forceTouchPressureThreshold {
-                handlers.onForceTouch?()
+            if type == .leftMouseDown {
+                let pressure = event.getDoubleValueField(.mouseEventPressure)
+                // 深按档阈值与 Force Touch 计数联动（PressureTier.deepThreshold）。
+                if pressure >= PressureTier.deepThreshold {
+                    handlers.onForceTouch?()
+                } else {
+                    handlers.onClick?()
+                }
+                // 三档压力直方图（引擎侧按 Force Touch 开关门控采集）。
+                handlers.onPressure?(pressure)
             } else {
                 handlers.onClick?()
             }
 
-        case .tapDisabledByTimeout:
+        case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
 
         default:
@@ -390,8 +421,66 @@ public final class EventMonitor: @unchecked Sendable {
                         handlers.onKeyUp?(keyID)
                     }
                 }
+                return
+            }
+            // 手势事件：无命名 CG 枚举，按原始数值过滤后转 NSEvent 处理。
+            handlePossibleGestureEvent(type: type, event: event)
+        }
+    }
+
+    // MARK: - 滚动（垂直 / 横向 / 会话）
+
+    private func handleScrollWheel(_ event: CGEvent) {
+        let deltaY = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
+        if deltaY != 0 { handlers.onScroll?(deltaY) }
+        let deltaX = event.getDoubleValueField(.scrollWheelEventDeltaAxis2)
+        if deltaX != 0 { handlers.onScrollHorizontal?(deltaX) }
+
+        // 滚动会话：scrollWheel 自带 phase（AppKit NSEvent.h NSEventPhase 位值：
+        // began 0x1 / stationary 0x2 / changed 0x4 / ended 0x8 / cancelled 0x10 /
+        // mayBegin 0x20）。触控板滚动从 mayBegin/began 开始、ended/cancelled
+        // 结束，一次接触计 1 次会话；动量阶段（phase = 0）与滚轮鼠标（无 phase）
+        // 不计。不用 beginGesture→endGesture 判定：捏合等手势也走 beginGesture，
+        // 会把缩放误计为滚动会话。
+        let phase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
+        guard phase != 0 else { return }
+        var sessionEnded = false
+        stateLock.lock()
+        if phase & 0x18 != 0 {                       // ended / cancelled
+            if scrollSessionOpen {
+                scrollSessionOpen = false
+                sessionEnded = true
+            }
+        } else if phase & 0x21 != 0 {                // mayBegin / began
+            if scrollSessionOpen {
+                // 上一会话的 ended 事件丢失：先结算再开新会话。
+                sessionEnded = true
+            }
+            scrollSessionOpen = true
+        }
+        stateLock.unlock()
+        if sessionEnded { handlers.onScrollSession?() }
+    }
+
+    // MARK: - 手势事件（tap 投递的原始数值类型 → NSEvent）
+
+    private func handlePossibleGestureEvent(type: CGEventType, event: CGEvent) {
+        let raw = Int(type.rawValue)
+        guard Self.gestureEventRawValues.contains(raw),
+              let nsEvent = NSEvent(cgEvent: event) else { return }
+        if Self.debugEvents {
+            switch nsEvent.type {
+            case .magnify:
+                Self.debugLog("gesture magnify magnification=\(nsEvent.magnification)")
+            case .rotate:
+                Self.debugLog("gesture rotate rotation=\(nsEvent.rotation)")
+            case .pressure:
+                Self.debugLog("gesture pressure pressure=\(nsEvent.pressure) stage=\(nsEvent.stage)")
+            default:
+                Self.debugLog("gesture raw=\(raw) nsType=\(nsEvent.type.rawValue)")
             }
         }
+        handleGestureEvent(nsEvent)
     }
 
     private func isComboRepeat(_ comboID: String) -> Bool {
@@ -404,38 +493,70 @@ public final class EventMonitor: @unchecked Sendable {
         return lastComboID == comboID && now.timeIntervalSince(lastComboAt) < Self.comboDebounceInterval
     }
 
-    fileprivate func handleGestureEvent(_ event: NSEvent) {
+    // MARK: - 手势会话（缩放 / 旋转 / 智能缩放 / 轻扫）
+
+    private func handleGestureEvent(_ event: NSEvent) {
         switch event.type {
         case .beginGesture:
+            // 防 endGesture 丢失：开新会话前先结算悬挂的旧会话。
+            let dangling = finalizeGesture()
             stateLock.lock()
-            gestureActive = true
-            magnifySeenInGesture = false
+            gestureTracker = GestureSessionTracker()
             stateLock.unlock()
+            for kind in dangling { handlers.dispatch(kind) }
             handlers.onGestureStart?()
 
         case .magnify:
+            let delta = event.magnification
             stateLock.lock()
-            magnifySeenInGesture = gestureActive
+            gestureTracker?.addMagnification(delta)
+            let direction = gestureTracker?.magnifyDirectionSoFar
             stateLock.unlock()
-            if gestureActive { handlers.onMagnifyActive?() }
+            if let direction { handlers.onMagnifyLive?(direction) }
+
+        case .rotate:
+            stateLock.lock()
+            gestureTracker?.addRotation(Double(event.rotation))
+            stateLock.unlock()
 
         case .smartMagnify:
-            handlers.onZoom?()
+            handlers.onSmartZoom?()
 
         case .swipe:
             handlers.onSwipe?()
 
         case .endGesture:
-            stateLock.lock()
-            let wasZoom = gestureActive && magnifySeenInGesture
-            gestureActive = false
-            magnifySeenInGesture = false
-            stateLock.unlock()
-            if wasZoom { handlers.onZoom?() }
+            for kind in finalizeGesture() {
+                handlers.dispatch(kind)
+            }
             handlers.onGestureEnd?()
 
         default:
             break
+        }
+    }
+
+    /// 结算当前手势会话（缩放 / 旋转方向类别），返回后置空。
+    private func finalizeGesture() -> [TrackpadOperationKind] {
+        stateLock.lock()
+        let kinds = gestureTracker?.finish() ?? []
+        gestureTracker = nil
+        stateLock.unlock()
+        return kinds
+    }
+}
+
+// MARK: - Handlers 手势类别派发
+
+extension EventMonitor.Handlers {
+    /// 把 GestureSessionTracker 结算出的方向类别派发到对应回调。
+    fileprivate func dispatch(_ kind: TrackpadOperationKind) {
+        switch kind {
+        case .zoomIn: onZoomIn?()
+        case .zoomOut: onZoomOut?()
+        case .rotateCW: onRotate?(true)
+        case .rotateCCW: onRotate?(false)
+        default: break
         }
     }
 }

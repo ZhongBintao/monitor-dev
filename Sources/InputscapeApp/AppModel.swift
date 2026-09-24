@@ -105,6 +105,8 @@ public final class AppModel: ObservableObject {
         self.snapshot = .empty(.today)
         // 重启场景：回灌今天已落盘的记录，避免当日统计清零。
         engine.loadToday(from: store)
+        // Force Touch 开关联动引擎采集（关闭时不采压力分档、不计深按）。
+        engine.setForceTouchEnabled(saved.supportsForceTouch)
         refresh()
         // 已确认过设备且权限齐备（应用重启场景）：立即恢复监听，
         // 否则 UI 显示"正在观察"但实际没有任何监听器在跑。
@@ -117,6 +119,7 @@ public final class AppModel: ObservableObject {
         deviceProfile = DeviceProfile(keyboardTemplate: template,
                                       confirmed: true,
                                       supportsForceTouch: supportsForceTouch)
+        engine.setForceTouchEnabled(supportsForceTouch)
         saveDeviceProfile()
         onboardingVisible = false
         refreshPermission()
@@ -132,6 +135,7 @@ public final class AppModel: ObservableObject {
 
     public func setForceTouchSupport(_ supported: Bool) {
         deviceProfile.supportsForceTouch = supported
+        engine.setForceTouchEnabled(supported)
         saveDeviceProfile()
     }
 
@@ -199,6 +203,14 @@ public final class AppModel: ObservableObject {
 
     private func startMonitor() {
         let engine = self.engine
+        // 触控板操作通用管道：聚合 + 实时流 + 防抖落盘。
+        let track: @Sendable (TrackpadOperationKind) -> Void = { kind in
+            engine.ingestTrackpad(kind)
+            Task { @MainActor in
+                LiveModel.shared.noteTrackpad(kind, inProgress: false)
+                AppModel.shared.scheduleSave()
+            }
+        }
         let handlers = EventMonitor.Handlers(
             onKey: { keyID in
                 engine.ingestKey(keyID: keyID)
@@ -224,46 +236,49 @@ public final class AppModel: ObservableObject {
                 // 自然滚动开启时内容跟随手指（手指下 = deltaY>0），关闭时相反。
                 let natural = UserDefaults.standard.object(forKey: "com.apple.swipescrolldirection") as? Bool ?? true
                 let fingersDown = natural ? deltaY > 0 : deltaY < 0
-                let kind: TrackpadOperationKind = fingersDown ? .scrollDown : .scrollUp
-                engine.ingestTrackpad(kind)
-                Task { @MainActor in
-                    LiveModel.shared.noteTrackpad(kind, inProgress: false)
-                    AppModel.shared.scheduleSave()
-                }
+                track(fingersDown ? .scrollDown : .scrollUp)
+            },
+            onScrollHorizontal: { _ in
+                // 横向滚动单类别计数，不分左右（提案口径）。
+                track(.scrollHorizontal)
+            },
+            onScrollSession: {
+                track(.scrollSession)
             },
             onClick: {
-                engine.ingestTrackpad(.click)
-                Task { @MainActor in
-                    LiveModel.shared.noteTrackpad(.click, inProgress: false)
-                    AppModel.shared.scheduleSave()
-                }
+                track(.click)
             },
             onForceTouch: {
-                engine.ingestTrackpad(.forceTouch)
-                Task { @MainActor in
-                    LiveModel.shared.noteTrackpad(.forceTouch, inProgress: false)
-                    AppModel.shared.scheduleSave()
-                }
+                // 设备不支持 Force Touch 时开关真正生效：不计数、不进实时流。
+                guard engine.isForceTouchEnabled() else { return }
+                track(.forceTouch)
             },
-            onZoom: {
-                engine.ingestTrackpad(.zoom)
-                Task { @MainActor in
-                    LiveModel.shared.noteTrackpad(.zoom, inProgress: false)
-                    AppModel.shared.scheduleSave()
-                }
+            onPressure: { pressure in
+                // 三档直方图 + 压力和（引擎内部按开关门控）。
+                engine.ingestPressure(pressure)
+            },
+            onZoomIn: {
+                track(.zoomIn)
+            },
+            onZoomOut: {
+                track(.zoomOut)
+            },
+            onSmartZoom: {
+                track(.smartZoom)
+            },
+            onRotate: { clockwise in
+                track(clockwise ? .rotateCW : .rotateCCW)
             },
             onSwipe: {
-                engine.ingestTrackpad(.swipe)
+                track(.swipe)
+            },
+            onMagnifyLive: { isZoomIn in
                 Task { @MainActor in
-                    LiveModel.shared.noteTrackpad(.swipe, inProgress: false)
-                    AppModel.shared.scheduleSave()
+                    LiveModel.shared.noteZoomInProgress(zoomIn: isZoomIn)
                 }
             },
             onGestureStart: {
                 Task { @MainActor in LiveModel.shared.noteGestureStart() }
-            },
-            onMagnifyActive: {
-                Task { @MainActor in LiveModel.shared.noteZoomInProgress() }
             },
             onGestureEnd: {
                 Task { @MainActor in LiveModel.shared.noteGestureEnd() }

@@ -166,7 +166,14 @@ struct LiveView: View {
         case .click: return "cursorarrow.click"
         case .scrollUp: return "arrow.up"
         case .scrollDown: return "arrow.down"
+        case .scrollHorizontal: return "arrow.left.and.right"
+        case .scrollSession: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .zoomIn: return "plus.magnifyingglass"
+        case .zoomOut: return "minus.magnifyingglass"
+        case .smartZoom: return "plus.viewfinder"
         case .zoom: return "plus.magnifyingglass"
+        case .rotateCW: return "rotate.right"
+        case .rotateCCW: return "rotate.left"
         case .swipe: return "hand.draw"
         case .forceTouch: return "hand.point.up.left.fill"
         }
@@ -322,6 +329,7 @@ struct SettingsView: View {
                 Text("数据与隐私").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
                 VStack(alignment: .leading, spacing: 6) {
                     bullet("仅保存本地聚合统计：每日按键数、触控操作数、活跃输入时长、5 分钟桶与键位计数。")
+                    bullet("点击压力仅按轻/中/深三档计数并保留平均压力，不保存压力原始值或轨迹。")
                     bullet("不记录文字内容、按键序列、应用名称、屏幕坐标或原始事件。")
                     bullet("不提供云同步、导出或账号体系；历史数据持续保留在本机。")
                     bullet("实时观察状态仅保存在内存中，退出即丢弃。")

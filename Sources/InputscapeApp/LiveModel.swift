@@ -66,11 +66,12 @@ public final class LiveModel: ObservableObject {
     }
 
     public func noteGestureStart() {
-        state.gestureInProgress = nil // 手势进行中，类型待判别
+        state.gestureInProgress = nil // 手势会话开始，方向待判别
     }
 
-    public func noteZoomInProgress() {
-        state.gestureInProgress = .zoom
+    /// 放大手势进行中（按净方向即时展示；计数在手势结束时结算）。
+    public func noteZoomInProgress(zoomIn: Bool) {
+        state.gestureInProgress = zoomIn ? .zoomIn : .zoomOut
     }
 
     public func noteGestureEnd() {
