@@ -54,8 +54,9 @@ struct MTTouchC {
 }
 
 /// 触点状态机（MTTouchState）：3(making)/4(touching) = 接触中；
-/// 5(breaking)/6(lingering)/7(outOfRange) = 即将或已经离开；
-/// 1(startInRange)/2(hover) = 接近未触，忽略。
+/// 5(breaking)/6(lingering)/7(outOfRange) = 离开信号；
+/// 1(startInRange)/2(hover) = 接近未触。帧语义下只派发接触中手指，
+/// 「离开」由帧缺席表达（对齐 Kyome22 OMS touchDataStream 的全量口径）。
 enum MTTouchStateC {
     static let making: UInt32 = 3
     static let touching: UInt32 = 4
@@ -64,18 +65,23 @@ enum MTTouchStateC {
     static let outOfRange: UInt32 = 7
 }
 
-/// 单个触点样本（多路消费：热力网格 / 压力直方图 / 实时触控板）。
+/// 单个触点样本（一帧内接触中的手指，坐标已翻转为 0=上）。
 public struct TouchSample: Sendable {
-    public enum State: Sendable {
-        case contact      // 接触中（making / touching）
-        case departure    // 离开（breaking / lingering / outOfRange）
-    }
-
     public let fingerID: Int32
-    public let x: Double          // 归一化 0–1，左→右
-    public let y: Double          // 归一化 0–1，上→下
-    public let pressure: Double   // 0–1 连续手指压力
-    public let state: State
+    public let x: Double           // 归一化 0–1，左→右
+    public let y: Double           // 归一化 0–1，上→下（已由 MT 左下原点翻转）
+    public let pressure: Double    // 电容总量 0–1（zTotal，按帧）
+    public let majorAxis: Double   // 接触椭圆长轴（mm）
+    public let minorAxis: Double   // 接触椭圆短轴（mm）
+    public let angle: Double       // 椭圆旋转角（弧度）
+}
+
+/// 一帧内的全部有效触点（已过手掌过滤）。
+/// 消费端以「帧全量替换」同步状态：本帧没有的手指即已离开——
+/// 触点集合与物理接触严格一致，不依赖离开事件（对齐
+/// Kyome22 OMS Demo 的 touchDataStream 全量替换用法）。
+public struct TouchFrame: Sendable {
+    public let touches: [TouchSample]
 }
 
 /// MTRegisterContactFrameCallback 的回调签名。
@@ -111,60 +117,83 @@ func MTRegisterContactFrameCallback(_ device: MTDeviceRef, _ callback: MTFrameCa
 private let callbackRouteLock = NSLock()
 private nonisolated(unsafe) var activeTouchHandler: TouchpointMonitor.TouchHandler?
 
-/// 诊断探针：INPUTSCAPE_DEBUG_TOUCH=1 时把触点样本（坐标/压力/状态）
-/// 追加到 /tmp/inputscape-events.log，用于核对 MTTouch 布局、坐标方向
-/// 与手指压力值域（压力阈值标定的数据来源）。只记录字段数值。
+/// 诊断探针：INPUTSCAPE_DEBUG_TOUCH=1 时把触点样本（坐标/压力/椭圆轴）
+/// 追加到 /tmp/inputscape-events.log，用于核对 MTTouch 布局、坐标方向、
+/// 手指压力值域与手掌判定阈值。只记录字段数值。
 private let debugTouchSamples =
     ProcessInfo.processInfo.environment["INPUTSCAPE_DEBUG_TOUCH"] == "1"
 private nonisolated(unsafe) var debugSampleCount = 0
 private let debugSampleLock = NSLock()
 
-/// C 回调入口：只做状态映射 + 样本派发，MT 内部线程高频调用，
-/// 必须保持纳秒级开销（无分配、无字符串；探针仅在 env 门控下启用）。
+/// C 回调入口：每帧组装全量触点列表（方向翻转 + 手掌过滤）后派发。
+/// MT 内部线程高频调用；探针仅在 env 门控下启用。
 private let mtFrameCallback: MTFrameCallbackC = { _, touches, numTouches, _, _ in
     callbackRouteLock.lock()
     let handler = activeTouchHandler
     callbackRouteLock.unlock()
-    guard let handler, numTouches > 0 else { return }
+
+    var contacts: [TouchSample] = []
+    contacts.reserveCapacity(numTouches)
     let stride = MemoryLayout<MTTouchC>.stride
     for index in 0..<numTouches {
         let touch = touches.load(fromByteOffset: index * stride, as: MTTouchC.self)
-        let state: TouchSample.State
-        switch touch.state {
-        case MTTouchStateC.making, MTTouchStateC.touching:
-            state = .contact
-        case MTTouchStateC.breaking, MTTouchStateC.lingering, MTTouchStateC.outOfRange:
-            state = .departure
-        default:
-            continue // 接近未触等状态不派发
-        }
-        let sample = TouchSample(
-            fingerID: touch.fingerID,
-            x: Double(touch.normalizedVector.position.x),
-            y: Double(touch.normalizedVector.position.y),
-            pressure: Double(touch.zTotal),
-            state: state
-        )
+        // 只收接触中的手指（making/touching）；离开信号由「帧缺席」表达，
+        // 悬停（hover）与离开态不进帧。
+        guard touch.state == MTTouchStateC.making || touch.state == MTTouchStateC.touching else { continue }
+
+        // 坐标方向：MT 归一化 y 原点在左下（Kyome22 OMS Demo 渲染时
+        // 以 1 - y 翻转），此处统一翻转为 0=上，消费端无需再处理。
+        let x = Double(touch.normalizedVector.position.x)
+        let y = 1.0 - Double(touch.normalizedVector.position.y)
+        let major = Double(touch.majorAxis)
+        let minor = Double(touch.minorAxis)
+
         if debugTouchSamples {
             debugSampleLock.lock()
             debugSampleCount += 1
             let count = debugSampleCount
             debugSampleLock.unlock()
-            if count <= 200 {
-                EventMonitor.debugLogForProbe("touch id=\(sample.fingerID) x=\(sample.x) y=\(sample.y) pressure=\(sample.pressure) state=\(state == .contact ? "contact" : "departure")")
+            if count <= 400 {
+                EventMonitor.debugLogForProbe("touch id=\(touch.fingerID) x=\(x) y=\(y) pressure=\(Double(touch.zTotal)) major=\(major) minor=\(minor) palm=\(TouchpointMonitor.isPalm(majorAxis: major, minorAxis: minor)) state=\(touch.state)")
             }
         }
-        handler(sample)
+
+        // 手掌误触防护：手掌接触椭圆显著大于手指（手指长轴 ~9–13mm），
+        // 超过阈值即过滤，不进任何统计与显示。阈值经探针真机校准。
+        if TouchpointMonitor.isPalm(majorAxis: major, minorAxis: minor) { continue }
+
+        contacts.append(TouchSample(
+            fingerID: touch.fingerID,
+            x: x,
+            y: y,
+            pressure: Double(touch.zTotal),
+            majorAxis: major,
+            minorAxis: minor,
+            angle: Double(touch.angle)
+        ))
     }
+    // 空帧也派发：消费端全量替换语义下，空帧 = 全部手指已离开。
+    handler?(TouchFrame(touches: contacts))
 }
 
 // MARK: - 触点监听器
 
-/// 触控板触点监听器（实验性）。聚合层只拿归一化坐标（0–1，x 左→右，y 上→下），
-/// 网格聚合在 AggregationEngine 完成。
+/// 触控板触点监听器。以「帧」为单位派发全量触点（TouchFrame），
+/// 坐标统一为 0–1（x 左→右，y 上→下），并已做手掌误触过滤。
+/// 网格聚合 / 压力直方图 / 实时显示共用同一帧流。
 public final class TouchpointMonitor: @unchecked Sendable {
 
-    public typealias TouchHandler = @Sendable (_ sample: TouchSample) -> Void
+    public typealias TouchHandler = @Sendable (_ frame: TouchFrame) -> Void
+
+    /// 手掌过滤阈值（mm）：手指接触椭圆长轴 ~9–13mm，手掌显著更大。
+    /// 经验值，随 INPUTSCAPE_DEBUG_TOUCH 探针数据校准。
+    public static let palmMajorAxisThreshold: Double = 20.0
+    public static let palmMinorAxisThreshold: Double = 15.0
+
+    /// 手掌判定：接触椭圆任一轴达到手掌量级即视为误触。
+    static func isPalm(majorAxis: Double, minorAxis: Double) -> Bool {
+        majorAxis >= palmMajorAxisThreshold || minorAxis >= palmMinorAxisThreshold
+    }
 
     public static let shared = TouchpointMonitor()
 

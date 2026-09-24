@@ -15,7 +15,10 @@ struct LiveView: View {
                         deviceConfirmed: model.deviceProfile.confirmed,
                         supportsForceTouch: model.deviceProfile.supportsForceTouch)
             HStack(alignment: .top, spacing: 16) {
-                keyboardCard
+                VStack(alignment: .leading, spacing: 16) {
+                    keyboardCard
+                    liveTouchpadCard
+                }
                 sidePanel.frame(width: 280)
             }
             Spacer(minLength: 0)
@@ -53,32 +56,30 @@ struct LiveView: View {
 
     private var sidePanel: some View {
         VStack(alignment: .leading, spacing: 16) {
-            heldKeysCard
-            liveTouchpadCard
-            currentGestureCard
             statusCard
+            heldKeysCard
+            currentGestureCard
         }
     }
 
-    /// 实时触控板：当前接触中的手指位置与按压强度即时反馈
-    /// （圆点越大、颜色越深 = 按压越重；30Hz 合并刷新）。
+    /// 实时触控板（键盘 UI 下方的大显示区域）：当前接触手指的
+    /// 位置 / 接触椭圆 / 按压强度即时反馈。渲染方式对齐
+    /// Kyome22 OMS Demo（椭圆 + 角度旋转 + 电容透明度）。
     private var liveTouchpadCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("实时触控板").font(.system(size: 14, weight: .bold)).foregroundColor(Theme.navy)
-                    HelpMarker(text: "手指接触触控板时，接触位置以圆点实时显示：圆点越大、颜色越深表示按压越重（0–1 连续压力）。当前触点状态仅保存在内存中，退出即丢弃。")
-                    Spacer()
-                }
-                TouchpadLivePanel(dots: live.touchDots)
-                HStack {
-                    Text("当前触点").font(.system(size: 13)).foregroundColor(Theme.secondary)
+                    Text("实时触控板").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
+                    HelpMarker(text: "手指接触触控板时，接触区域以椭圆实时显示：椭圆大小即真实接触面积（长轴/短轴），颜色深浅表示按压强度（0–1 连续压力），方向随手指移动一致。触点集合与物理接触实时同步，手掌误触已被过滤。当前状态仅保存在内存中，退出即丢弃。")
                     Spacer()
                     Text("\(live.touchDots.count) 指 · 最大按压 \(maxLivePressureText)")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Theme.navy)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Theme.secondary)
                         .monospacedDigit()
                 }
+                TouchpadLivePanel(dots: live.touchDots)
+                    .frame(maxWidth: 640)
+                    .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -198,7 +199,9 @@ struct LiveView: View {
 
 // MARK: - 实时触控板面板
 
-/// 当前触点圆点（大小与透明度随手指压力 0–1 变化），仅内存数据渲染。
+/// 当前触点渲染（对齐 Kyome22 OMS Demo 官方用法）：
+/// 接触区域画为椭圆（长/短轴按毫米→屏宽百分比换算、随 angle 旋转），
+/// 透明度随电容总量（按压强度）。坐标已由监听层翻转为 0=上。
 struct TouchpadLivePanel: View {
     let dots: [LiveState.TouchDot]
 
@@ -209,12 +212,21 @@ struct TouchpadLivePanel: View {
             ZStack {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(Theme.background)
-                ForEach(dots) { dot in
-                    let diameter = size.height * (0.07 + 0.06 * CGFloat(min(1, max(0, dot.pressure))))
-                    Circle()
-                        .fill(Theme.coral.opacity(0.35 + 0.55 * min(1, max(0, dot.pressure))))
-                        .frame(width: diameter, height: diameter)
-                        .position(x: dot.x * size.width, y: dot.y * size.height)
+                Canvas { context, canvasSize in
+                    let unit = canvasSize.width / 100.0
+                    for dot in dots {
+                        let x = dot.x * canvasSize.width
+                        let y = dot.y * canvasSize.height
+                        let w = dot.majorAxis * unit
+                        let h = dot.minorAxis * unit
+                        let rect = CGRect(x: -0.5 * w, y: -0.5 * h, width: w, height: h)
+                        let path = Path(ellipseIn: rect)
+                            .rotation(.radians(-dot.angle), anchor: .topLeading)
+                            .offset(x: x, y: y)
+                            .path(in: CGRect(origin: .zero, size: canvasSize))
+                        let intensity = 0.25 + 0.65 * min(1, max(0, dot.pressure))
+                        context.fill(path, with: .color(Theme.coral.opacity(intensity)))
+                    }
                 }
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(Theme.hairline, lineWidth: 1)

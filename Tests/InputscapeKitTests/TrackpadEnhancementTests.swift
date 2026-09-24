@@ -61,6 +61,20 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertEqual(tiers.deep, 5)
     }
 
+    // MARK: - 手掌误触防护
+
+    /// 手掌判定：接触椭圆任一轴达到手掌量级（mm）即过滤。
+    /// 手指接触椭圆长轴 ~9–13mm，手掌显著更大。
+    func testPalmRejectionHeuristics() {
+        XCTAssertFalse(TouchpointMonitor.isPalm(majorAxis: 10, minorAxis: 7), "典型手指接触")
+        XCTAssertFalse(TouchpointMonitor.isPalm(majorAxis: 13, minorAxis: 9), "大手指接触")
+        XCTAssertTrue(TouchpointMonitor.isPalm(majorAxis: 25, minorAxis: 12), "长轴达手掌量级")
+        XCTAssertTrue(TouchpointMonitor.isPalm(majorAxis: 11, minorAxis: 16), "短轴达手掌量级")
+        XCTAssertTrue(TouchpointMonitor.isPalm(majorAxis: 30, minorAxis: 20), "典型手掌")
+        XCTAssertEqual(TouchpointMonitor.palmMajorAxisThreshold, 20.0)
+        XCTAssertEqual(TouchpointMonitor.palmMinorAxisThreshold, 15.0)
+    }
+
     // MARK: - 引擎聚合
 
     /// 手指按压按帧累计：直方图反映「压力 × 停留时间」，

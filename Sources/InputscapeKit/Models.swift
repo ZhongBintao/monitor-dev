@@ -376,19 +376,27 @@ public struct LiveState: Sendable, Equatable {
         }
     }
 
-    /// 实时触控板上的当前触点（归一化坐标 + 手指压力），仅内存。
+    /// 实时触控板上的当前触点（归一化坐标 + 接触椭圆），仅内存。
+    /// 触点集合以「帧全量替换」同步，与物理接触严格一致。
     public struct TouchDot: Sendable, Equatable, Identifiable {
         public let fingerID: Int32
         public let x: Double
         public let y: Double
         public let pressure: Double
+        public let majorAxis: Double
+        public let minorAxis: Double
+        public let angle: Double
         public var id: Int32 { fingerID }
 
-        public init(fingerID: Int32, x: Double, y: Double, pressure: Double) {
+        public init(fingerID: Int32, x: Double, y: Double, pressure: Double,
+                    majorAxis: Double, minorAxis: Double, angle: Double) {
             self.fingerID = fingerID
             self.x = x
             self.y = y
             self.pressure = pressure
+            self.majorAxis = majorAxis
+            self.minorAxis = minorAxis
+            self.angle = angle
         }
     }
 

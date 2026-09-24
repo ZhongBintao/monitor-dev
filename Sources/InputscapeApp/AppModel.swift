@@ -439,13 +439,16 @@ public final class AppModel: ObservableObject {
             && status == .running
         if shouldRun {
             let engine = self.engine
-            TouchpointMonitor.shared.start { sample in
-                // 热力网格 + 按压强度直方图（MT 线程直接聚合，无 UI 路径）。
-                engine.ingestTouchpoint(normalizedX: sample.x, normalizedY: sample.y)
-                engine.ingestTouchPressure(sample.pressure)
-                // 实时触控板（LiveModel 内部锁缓存，30Hz 合并发布）。
+            TouchpointMonitor.shared.start { frame in
+                // 热力网格 + 按压强度直方图：逐接触手指聚合
+                // （手掌已被 monitor 过滤；MT 线程直接聚合，无 UI 路径）。
+                for sample in frame.touches {
+                    engine.ingestTouchpoint(normalizedX: sample.x, normalizedY: sample.y)
+                    engine.ingestTouchPressure(sample.pressure)
+                }
+                // 实时触控板（帧全量替换缓存，30Hz 合并发布）。
                 Task { @MainActor in
-                    LiveModel.shared.noteTouchSample(sample)
+                    LiveModel.shared.noteTouchFrame(frame)
                 }
             }
             LiveModel.shared.startTouchPulse()
