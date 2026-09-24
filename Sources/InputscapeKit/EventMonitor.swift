@@ -99,6 +99,31 @@ public final class EventMonitor: @unchecked Sendable {
     /// 组合键去抖：同一和弦在窗口内视为按键重复，不重复计数。
     public static let comboDebounceInterval: TimeInterval = 0.15
 
+    // MARK: - 事件探针（诊断用）
+
+    /// 环境变量 INPUTSCAPE_DEBUG_EVENTS=1 时，把 tap 看到的 keyDown 键码
+    /// （含未映射）与全部 systemDefined 事件（含 subtype ≠ 8）追加到
+    /// /tmp/inputscape-events.log，用于排查特殊功能键（F3/F5/F6 等）
+    /// 的事件投递形态。只记录键码与事件字段，不记录字符内容。
+    private static let debugEvents =
+        ProcessInfo.processInfo.environment["INPUTSCAPE_DEBUG_EVENTS"] == "1"
+    private static let debugLogURL = URL(fileURLWithPath: "/tmp/inputscape-events.log")
+    private static let debugLock = NSLock()
+
+    private static func debugLog(_ line: String) {
+        guard debugEvents else { return }
+        debugLock.lock(); defer { debugLock.unlock() }
+        let text = "\(String(format: "%.3f", Date().timeIntervalSince1970)) \(line)\n"
+        let data = Data(text.utf8)
+        if let handle = try? FileHandle(forWritingTo: debugLogURL) {
+            defer { try? handle.close() }
+            handle.seekToEndOfFile()
+            handle.write(data)
+        } else {
+            try? data.write(to: debugLogURL)
+        }
+    }
+
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var keepAliveTimer: Timer?
@@ -251,6 +276,10 @@ public final class EventMonitor: @unchecked Sendable {
         case .keyDown:
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             let code = UInt64(bitPattern: keyCode)
+            if Self.debugEvents {
+                let mapped = KeyCodeMapper.keyID(for: code) ?? KeyCodeMapper.specialKeyMap[code]
+                Self.debugLog("keyDown code=\(keyCode) mapped=\(mapped.map { "'\($0)'" } ?? "nil")")
+            }
             let flags = event.flags
 
             // Apple Silicon 特殊键码（F3 调度中心 / F4 启动台或聚焦）。
@@ -337,15 +366,29 @@ public final class EventMonitor: @unchecked Sendable {
             // 按下（keyState 0xA）与释放（0xB）是同一事件的两种状态：
             // 按下计数并点亮，释放熄灭——与普通键 keyDown/keyUp 行为对称。
             // 此前只处理按下帧，实时层的按下状态会永久残留（实测缺陷）。
-            if type.rawValue == 14, let nsEvent = NSEvent(cgEvent: event),
-               nsEvent.type == .systemDefined, nsEvent.subtype.rawValue == 8 {
-                let data1 = Int64(nsEvent.data1)
-                guard !KeyCodeMapper.isMediaKeyRepeat(data1),
-                      let keyID = KeyCodeMapper.keyID(forMediaData1: data1) else { return }
-                if KeyCodeMapper.isMediaKeyDown(data1) {
-                    handlers.onKey?(keyID)
-                } else {
-                    handlers.onKeyUp?(keyID)
+            if type.rawValue == 14 {
+                // 探针：记录全部 systemDefined 事件（含 subtype ≠ 8），
+                // 用于排查特殊功能键（F3/F5/F6）的实际投递形态
+                let nsEvent = NSEvent(cgEvent: event)
+                if Self.debugEvents {
+                    if let nsEvent, nsEvent.type == .systemDefined {
+                        let data1 = Int64(nsEvent.data1)
+                        let keyType = Int((data1 & 0xFFFF0000) >> 16)
+                        let keyFlags = Int(data1 & 0x0000FFFF)
+                        Self.debugLog("systemDefined subtype=\(nsEvent.subtype.rawValue) data1=0x\(String(data1, radix: 16)) keyType=\(keyType) keyFlags=0x\(String(keyFlags, radix: 16))")
+                    } else {
+                        Self.debugLog("systemDefined nsConv=nil rawType=\(type.rawValue)")
+                    }
+                }
+                if let nsEvent, nsEvent.type == .systemDefined, nsEvent.subtype.rawValue == 8 {
+                    let data1 = Int64(nsEvent.data1)
+                    guard !KeyCodeMapper.isMediaKeyRepeat(data1),
+                          let keyID = KeyCodeMapper.keyID(forMediaData1: data1) else { return }
+                    if KeyCodeMapper.isMediaKeyDown(data1) {
+                        handlers.onKey?(keyID)
+                    } else {
+                        handlers.onKeyUp?(keyID)
+                    }
                 }
             }
         }

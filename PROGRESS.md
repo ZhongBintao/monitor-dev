@@ -105,7 +105,7 @@ monitor-dev/
 15. **自定义区间弹层**：选期为三段状态机——第 1 次点击选开始、第 2 次选结束（**不早于开始日期，允许同一天**）、第 3 次点击重置回选开始；`end >= start` 判定贯穿点击/键入/规范化/回填/应用五处。输入框一行排布，`parseFlexible` 接受 `2026-9-3`（缺前导零）与 `20260913`（8 位无分隔符），补零、超月收敛到月末、非法回退；同日端点合并标记「开始 · 结束」。打开弹层回填当前生效区间。
 16. **日历跟手 pager**：三联网格（上一月 | 当前月 | 下一月）+ `dragOffset` 跟手位移；单月网格为 **Equatable 子视图**（比较 month/startDay/endDay，挂 `.equatable()`）——拖动中三者不变即跳过全网格重建，每帧只剩 offset 合成（跟手性能的关键）；网格用确定性 `Grid`（非 Lazy，防滑入 popping）。触发判定五路并行：位移 ≥ 面板宽 1/9（32pt）/ 快甩（预测终点 ≥ 1/4 宽且同向）/ 拖过面板 55% 中途翻页 / 双指动量满额延续带过阈值 / 都不满足弹回。**`gestureCommitted` 保证一次手势流只翻一页**，其生命周期必须覆盖 phase 流与 momentum 流的所有结束路径（漏复位会冻结 pager）。
 17. **ForEach 身份唯一性红线**：日历网格的空占位格（nil）绝不能用 `Date?.self` 作 ForEach 身份——一行内多个 nil 共享身份会使 SwiftUI diff 未定义（实测：端点标记残留、区间带断档）。格子 id 用行内列下标。
-18. **诊断钩子**（环境变量，仅开发验证用）：`INPUTSCAPE_PAGE=<page>` 指定初始页（首帧后切换——**init 阶段直接设 page 会导致状态栏不绘制**）、`INPUTSCAPE_RANGE=start:end` 应用区间、`INPUTSCAPE_OPEN_CUSTOM_RANGE=1` 开弹层、`INPUTSCAPE_PICKER_START=iso` 强制"已选开始待选结束"态。
+18. **诊断钩子**（环境变量，仅开发验证用）：`INPUTSCAPE_PAGE=<page>` 指定初始页（首帧后切换——**init 阶段直接设 page 会导致状态栏不绘制**）、`INPUTSCAPE_RANGE=start:end` 应用区间、`INPUTSCAPE_OPEN_CUSTOM_RANGE=1` 开弹层、`INPUTSCAPE_PICKER_START=iso` 强制"已选开始待选结束"态、`INPUTSCAPE_DEBUG_EVENTS=1` 开启事件探针（tap 看到的 keyDown 键码与全部 systemDefined 事件落 /tmp/inputscape-events.log，用于特殊功能键投递形态排查）。
 
 ## 七、已知边界与风险
 
