@@ -1,9 +1,10 @@
 import XCTest
 @testable import InputscapeKit
 
-/// 触控板增强（手势扩展 + 点击压力分档）：
-/// 压力分档阈值、手势方向判定、引擎聚合、存储兼容
+/// 触控板增强（点击压力分档 + 触点热力图）：
+/// 压力分档阈值、引擎聚合、触点网格映射、存储兼容
 /// （旧 JSON 容缺 + 白名单同步）与快照合并。
+/// 手势口径已收缩为官方事件直计（smartZoom/swipe），无自定义识别逻辑可测。
 final class TrackpadEnhancementTests: XCTestCase {
 
     private var calendar: Calendar!
@@ -76,30 +77,21 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertTrue(engine.isForceTouchEnabled())
     }
 
-    func testNewGestureKindsIngestAndSnapshot() {
+    /// 手势收缩后保留的官方事件直计类别照常进引擎与快照。
+    func testOfficialGestureKindsIngestAndSnapshot() {
         let engine = makeEngine()
-        engine.ingestTrackpad(.zoomIn)
-        engine.ingestTrackpad(.zoomOut)
         engine.ingestTrackpad(.smartZoom)
-        engine.ingestTrackpad(.rotateCW)
-        engine.ingestTrackpad(.rotateCCW)
-        engine.ingestTrackpad(.scrollHorizontal)
-        engine.ingestTrackpad(.scrollHorizontal)
-        engine.ingestTrackpad(.scrollSession)
+        engine.ingestTrackpad(.swipe)
+        engine.ingestTrackpad(.click)
 
         let record = engine.todayRecord()
-        XCTAssertEqual(record.trackpadCount(.zoomIn), 1)
-        XCTAssertEqual(record.trackpadCount(.zoomOut), 1)
         XCTAssertEqual(record.trackpadCount(.smartZoom), 1)
-        XCTAssertEqual(record.trackpadCount(.rotateCW), 1)
-        XCTAssertEqual(record.trackpadCount(.rotateCCW), 1)
-        XCTAssertEqual(record.trackpadCount(.scrollHorizontal), 2)
-        XCTAssertEqual(record.trackpadCount(.scrollSession), 1)
+        XCTAssertEqual(record.trackpadCount(.swipe), 1)
+        XCTAssertEqual(record.trackpadCount(.click), 1)
 
         let snap = engine.snapshot(scope: .today, store: store)
-        XCTAssertEqual(snap.trackpadCounts[.zoomIn], 1)
-        XCTAssertEqual(snap.trackpadCounts[.scrollHorizontal], 2)
-        XCTAssertEqual(snap.hourlyByOp[.scrollSession]?[10], 1, "新类别同样进入 24 小时分布")
+        XCTAssertEqual(snap.trackpadCounts[.smartZoom], 1)
+        XCTAssertEqual(snap.trackpadCounts[.swipe], 1)
     }
 
     /// 历史口径：方向拆分前落盘的 "zoom" 键在解码与快照中不丢失。
@@ -113,11 +105,71 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertEqual(snap.trackpadCounts[.zoom], 5, "历史 zoom 计数应保留并可见")
     }
 
+    // MARK: - 触点热力图
+
+    /// 归一化坐标 → 网格：左上角落第 0 行第 0 列，右下角落最后一格。
+    func testIngestTouchpointGridMapping() {
+        let engine = makeEngine()
+        engine.ingestTouchpoint(normalizedX: 0.0, normalizedY: 0.0)      // 左上
+        engine.ingestTouchpoint(normalizedX: 0.999, normalizedY: 0.999)  // 右下
+        engine.ingestTouchpoint(normalizedX: 0.5, normalizedY: 0.5)      // 中央
+
+        let grid = engine.todayRecord().touchGrid
+        XCTAssertEqual(grid.count, DailyRecord.touchGridCells)
+        XCTAssertEqual(grid[0], 1, "左上角触点应落第 0 行第 0 列")
+        let last = DailyRecord.touchGridCells - 1
+        XCTAssertEqual(grid[last], 1, "右下角触点应落最后一格")
+        let center = (DailyRecord.touchGridRows / 2) * DailyRecord.touchGridColumns
+            + DailyRecord.touchGridColumns / 2
+        XCTAssertEqual(grid[center], 1, "中央触点应落网格中部")
+    }
+
+    /// 越界坐标被钳制在网格内；触点不进桶、不延长活跃输入段。
+    func testIngestTouchpointClampsOutOfRangeAndSkipsBuckets() {
+        let engine = makeEngine()
+        engine.ingestTouchpoint(normalizedX: -0.5, normalizedY: 1.7) // → 钳到 (第 0 列, 最后一行)
+        engine.ingestTouchpoint(normalizedX: 2.0, normalizedY: -1.0) // → 钳到 (最后一列, 第 0 行)
+
+        let grid = engine.todayRecord().touchGrid
+        let lastRowStart = (DailyRecord.touchGridRows - 1) * DailyRecord.touchGridColumns
+        XCTAssertEqual(grid[lastRowStart], 1, "(-0.5, 1.7) 应钳到最后一行第 0 列")
+        XCTAssertEqual(grid[DailyRecord.touchGridColumns - 1], 1, "(2.0, -1.0) 应钳到第 0 行最后一列")
+        XCTAssertTrue(engine.todayRecord().buckets.isEmpty, "触点不应进 5 分钟桶")
+        XCTAssertEqual(engine.activeSecondsToday(), 0, accuracy: 0.001, "触点不应延长活跃输入段")
+    }
+
+    /// 快照合并多天触点网格（今天 + 落盘历史）。
+    func testSnapshotMergesTouchGridAcrossDays() {
+        var yesterday = DailyRecord(date: "2026-09-21")
+        yesterday.touchGrid = Array(repeating: 0, count: DailyRecord.touchGridCells)
+        yesterday.touchGrid[3] = 4
+        try? store.save(yesterday)
+
+        let engine = makeEngine()
+        engine.ingestTouchpoint(normalizedX: 0.9, normalizedY: 0.9) // 今天某格 +1
+
+        let snap = engine.snapshot(scope: .last7Days, store: store)
+        XCTAssertEqual(snap.touchGrid.count, DailyRecord.touchGridCells)
+        XCTAssertEqual(snap.touchGrid[3], 4, "历史日网格应合并")
+        XCTAssertEqual(snap.touchTotal, 5, "总触碰数 = 历史 + 今天")
+        XCTAssertEqual(snap.touchPeak?.count, 4, "最热格来自历史日")
+    }
+
+    func testSnapshotTouchCountAndEmptyGrid() {
+        let engine = makeEngine()
+        let snap = engine.snapshot(scope: .today, store: store)
+        XCTAssertEqual(snap.touchTotal, 0)
+        XCTAssertNil(snap.touchPeak)
+        XCTAssertEqual(snap.touchCount(row: 0, column: 0), 0)
+        XCTAssertEqual(snap.touchCount(row: -1, column: 0), 0, "越界读取返回 0")
+        XCTAssertEqual(snap.touchCount(row: 0, column: 999), 0, "越界读取返回 0")
+    }
+
     // MARK: - 存储兼容（增量字段容缺 + 白名单）
 
-    /// 2026-09 增量字段之前落盘的 JSON（无 pressureTierCounts / pressureSumMilli）
+    /// 2026-09 增量字段之前落盘的 JSON（无 pressure / touchGrid 字段）
     /// 必须能解码，缺省为空 / 0。
-    func testDecodeLegacyJSONWithoutPressureFields() throws {
+    func testDecodeLegacyJSONWithoutNewFields() throws {
         let json = """
         {"date":"2026-09-01","keyCounts":{"A":2},"trackpadCounts":{"click":1,"zoom":3},
          "comboCounts":{},"buckets":[],"hourlyByOp":{},"activeSeconds":12.5}
@@ -128,14 +180,17 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertEqual(record.trackpadCounts["zoom"], 3)
         XCTAssertEqual(record.pressureSampleTotal, 0)
         XCTAssertEqual(record.pressureSumMilli, 0)
+        XCTAssertEqual(record.touchGrid, [])
         XCTAssertNil(record.pressureAverage)
     }
 
     /// 新字段编码后必须在白名单内且可无损回环。
-    func testEncodedJSONContainsPressureFieldsAndWhitelistCovers() throws {
+    func testEncodedJSONContainsNewFieldsAndWhitelistCovers() throws {
         var record = DailyRecord(date: "2026-09-22")
         record.pressureTierCounts["deep"] = 2
         record.pressureSumMilli = 1800
+        record.touchGrid = Array(repeating: 0, count: DailyRecord.touchGridCells)
+        record.touchGrid[5] = 7
 
         let data = try JSONEncoder().encode(record)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -143,74 +198,10 @@ final class TrackpadEnhancementTests: XCTestCase {
                        "新增持久化字段必须同步隐私白名单：\(json.keys.sorted())")
         XCTAssertEqual(json["pressureTierCounts"] as? [String: Int], ["deep": 2])
         XCTAssertEqual(json["pressureSumMilli"] as? Int, 1800)
+        XCTAssertEqual((json["touchGrid"] as? [Int])?.count, DailyRecord.touchGridCells)
 
         let back = try JSONDecoder().decode(DailyRecord.self, from: data)
         XCTAssertEqual(back, record)
-    }
-
-    // MARK: - 手势方向判定（GestureSessionTracker）
-
-    func testZoomInAndOutByNetMagnification() {
-        var tracker = GestureSessionTracker()
-        tracker.addMagnification(0.02)
-        tracker.addMagnification(0.03)
-        XCTAssertEqual(tracker.finish(), [.zoomIn], "净放大 +0.05 应计 1 次放大")
-
-        tracker.addMagnification(-0.05)
-        XCTAssertEqual(tracker.finish(), [.zoomOut], "净缩小 −0.05 应计 1 次缩小")
-    }
-
-    /// 一次手势计 1 次：往复捏合（先张后合回原位）不产生计数。
-    func testBouncingMagnifyBelowThresholdCountsNothing() {
-        var tracker = GestureSessionTracker()
-        tracker.addMagnification(0.005)
-        tracker.addMagnification(-0.005)
-        XCTAssertTrue(tracker.finish().isEmpty, "净变化低于 1% 阈值视为误触")
-
-        tracker.addMagnification(0.2)
-        tracker.addMagnification(-0.2)
-        XCTAssertTrue(tracker.finish().isEmpty, "净变化归零的往复手势不计方向")
-    }
-
-    /// rotation 口径：自手势开始的累计角度，帧间差分累加。
-    func testRotationCumulativeDeltasSplitCWAndCCW() {
-        var tracker = GestureSessionTracker()
-        tracker.addRotation(-10)   // 首帧：累计 −10
-        tracker.addRotation(-25)   // 差分 −15
-        XCTAssertEqual(tracker.finish(), [.rotateCW], "净负角度 = 顺时针")
-
-        tracker.addRotation(5)
-        tracker.addRotation(30)    // 差分 +25
-        XCTAssertEqual(tracker.finish(), [.rotateCCW], "净正角度 = 逆时针")
-
-        XCTAssertTrue(tracker.finish().isEmpty, "重复 finish 不应重复计数")
-    }
-
-    func testRotationSmallJitterIgnored() {
-        var tracker = GestureSessionTracker()
-        tracker.addRotation(1.0)
-        tracker.addRotation(-1.0)
-        XCTAssertTrue(tracker.finish().isEmpty, "净角度低于 2° 阈值视为误触")
-    }
-
-    /// 同一会话同时含缩放与旋转：两类各计 1 次。
-    func testMagnifyAndRotateInSameGestureCountBoth() {
-        var tracker = GestureSessionTracker()
-        tracker.addMagnification(0.1)
-        tracker.addRotation(-20)
-        XCTAssertEqual(Set(tracker.finish()), [.zoomIn, .rotateCW])
-    }
-
-    /// 实时页「进行中」方向：随净方向即时翻转，无样本时为 nil。
-    func testMagnifyDirectionSoFarForLiveDisplay() {
-        var tracker = GestureSessionTracker()
-        XCTAssertNil(tracker.magnifyDirectionSoFar)
-        tracker.addMagnification(-0.02)
-        XCTAssertEqual(tracker.magnifyDirectionSoFar, false)
-        tracker.addMagnification(0.05)
-        XCTAssertEqual(tracker.magnifyDirectionSoFar, true, "净方向已转放大")
-        tracker.finish()
-        XCTAssertNil(tracker.magnifyDirectionSoFar, "结算后回到无样本态")
     }
 
     // MARK: - 快照压力合并

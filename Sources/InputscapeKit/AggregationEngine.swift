@@ -91,6 +91,24 @@ public final class AggregationEngine: @unchecked Sendable {
         record.pressureSumMilli += Int((pressure * 1000).rounded())
     }
 
+    // MARK: - 触点热力图
+
+    /// 记一次触点（归一化坐标 0–1，x 左→右，y 上→下）。
+    /// 触点位置只按 24×16 网格按日聚合计数；触点是"存在"而非"操作"：
+    /// 不进 5 分钟桶、时段分布，也不延长活跃输入段。
+    /// 由 MT 内部线程高频调用（~125Hz×触点数），只做格子累加。
+    public func ingestTouchpoint(normalizedX: Double, normalizedY: Double, at date: Date? = nil) {
+        lock.lock(); defer { lock.unlock() }
+        let t = date ?? now()
+        rolloverIfNeeded(at: t)
+        let column = min(DailyRecord.touchGridColumns - 1, max(0, Int(normalizedX * Double(DailyRecord.touchGridColumns))))
+        let row = min(DailyRecord.touchGridRows - 1, max(0, Int(normalizedY * Double(DailyRecord.touchGridRows))))
+        if record.touchGrid.count != DailyRecord.touchGridCells {
+            record.touchGrid = Array(repeating: 0, count: DailyRecord.touchGridCells)
+        }
+        record.touchGrid[row * DailyRecord.touchGridColumns + column] += 1
+    }
+
     // MARK: - 输入段（活跃输入时长）
 
     private func markActivity(at t: Date) {
@@ -233,6 +251,7 @@ public final class AggregationEngine: @unchecked Sendable {
         var hourly: [String: [Int]] = [:]
         var pressureTierCounts: [String: Int] = [:]
         var pressureSumMilli = 0
+        var touchGrid = Array(repeating: 0, count: DailyRecord.touchGridCells)
         var activeSeconds = 0.0
 
         for day in historical {
@@ -245,6 +264,7 @@ public final class AggregationEngine: @unchecked Sendable {
             }
             for (k, v) in day.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
             pressureSumMilli += day.pressureSumMilli
+            mergeTouchGrid(&touchGrid, day.touchGrid)
             activeSeconds += day.activeSeconds
         }
         for (k, v) in todayMerged.keyCounts { keyCounts[k, default: 0] += v }
@@ -256,6 +276,7 @@ public final class AggregationEngine: @unchecked Sendable {
         }
         for (k, v) in todayMerged.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
         pressureSumMilli += todayMerged.pressureSumMilli
+        mergeTouchGrid(&touchGrid, todayMerged.touchGrid)
         activeSeconds += todayMerged.activeSeconds
 
         // 桶：历史日按星期内聚合意义有限，快照桶 = 最近 dayCount 天逐桶求和。
@@ -321,8 +342,17 @@ public final class AggregationEngine: @unchecked Sendable {
             hourlyByOp: hourlyKind,
             daySeries: series,
             pressureTierCounts: pressureKindCounts,
-            pressureSumMilli: pressureSumMilli
+            pressureSumMilli: pressureSumMilli,
+            touchGrid: touchGrid
         )
+    }
+
+    /// 触点网格逐格累加（容忍长度不符的旧记录，缺省视为空网格）。
+    private func mergeTouchGrid(_ target: inout [Int], _ source: [Int]) {
+        guard target.count == DailyRecord.touchGridCells else { return }
+        for (index, value) in source.enumerated() where index < target.count {
+            target[index] += value
+        }
     }
 
     /// 生成以结束日为准的最近 n 天日期字符串（含结束日）。
@@ -393,6 +423,7 @@ public final class AggregationEngine: @unchecked Sendable {
         var hourly: [String: [Int]] = [:]
         var pressureTierCounts: [String: Int] = [:]
         var pressureSumMilli = 0
+        var touchGrid = Array(repeating: 0, count: DailyRecord.touchGridCells)
         var bucketMap: [Int: TimeBucket] = [:]
         var activeSeconds = 0.0
 
@@ -406,6 +437,7 @@ public final class AggregationEngine: @unchecked Sendable {
             }
             for (k, v) in day.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
             pressureSumMilli += day.pressureSumMilli
+            mergeTouchGrid(&touchGrid, day.touchGrid)
             for b in day.buckets {
                 if var existing = bucketMap[b.index] {
                     existing.keyboard += b.keyboard
@@ -451,7 +483,8 @@ public final class AggregationEngine: @unchecked Sendable {
             hourlyByOp: hourlyKind,
             daySeries: series,
             pressureTierCounts: pressureKindCounts,
-            pressureSumMilli: pressureSumMilli
+            pressureSumMilli: pressureSumMilli,
+            touchGrid: touchGrid
         )
     }
 }

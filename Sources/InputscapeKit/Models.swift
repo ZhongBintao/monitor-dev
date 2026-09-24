@@ -28,20 +28,16 @@ public enum PeriodScope: String, CaseIterable, Sendable {
 // MARK: - 触控板操作类别
 
 /// 触控板操作类别（聚合口径，不含坐标与轨迹）。
-/// 2026-09 触控板增强：缩放按方向拆分（zoomIn/zoomOut/smartZoom），
-/// 新增旋转、横向滚动与滚动会话；`zoom` 保留为历史口径（仅旧数据出现）。
+/// 手势口径（2026-09-24 收缩）：只保留 Apple 官方事件直接计数——
+/// 智能缩放（smartMagnify 事件）与三指轻扫（swipe 事件）；
+/// 缩放分向 / 旋转 / 横滚 / 滚动会话等需要自定义识别逻辑的口径已删除。
+/// `zoom` 保留为历史口径（仅方向拆分前的旧数据可见）。
 public enum TrackpadOperationKind: String, CaseIterable, Codable, Sendable {
     case click          // 单击 / 双击等按压
     case scrollUp       // 上滚（手指方向语义）
     case scrollDown     // 下滚
-    case scrollHorizontal // 横向滚动（deltaX ≠ 0，不区分左右）
-    case scrollSession  // 滚动会话：一次手指接触的滚动（phase began→ended）
-    case zoomIn         // 放大（张合手势净方向，一次手势计 1 次）
-    case zoomOut        // 缩小
-    case smartZoom      // 智能缩放（双指双击）
-    case rotateCW       // 顺时针旋转（一次手势计 1 次）
-    case rotateCCW      // 逆时针旋转
-    case swipe          // 三指轻扫导航（双指轻扫在系统内表现为滚动）
+    case smartZoom      // 智能缩放（双指双击，官方 smartMagnify 事件直计）
+    case swipe          // 三指轻扫导航（官方 swipe 事件直计；双指轻扫在系统内表现为滚动）
     case forceTouch     // 深按（设备支持时）
     case zoom           // 历史口径：方向拆分前的缩放（含智能缩放），不再新增
 
@@ -50,13 +46,7 @@ public enum TrackpadOperationKind: String, CaseIterable, Codable, Sendable {
         case .click: return "点击"
         case .scrollUp: return "上滚"
         case .scrollDown: return "下滚"
-        case .scrollHorizontal: return "横向滚动"
-        case .scrollSession: return "滚动会话"
-        case .zoomIn: return "放大"
-        case .zoomOut: return "缩小"
         case .smartZoom: return "智能缩放"
-        case .rotateCW: return "顺时针旋转"
-        case .rotateCCW: return "逆时针旋转"
         case .swipe: return "滑动"
         case .forceTouch: return "Force Touch"
         case .zoom: return "缩放（历史）"
@@ -66,7 +56,7 @@ public enum TrackpadOperationKind: String, CaseIterable, Codable, Sendable {
     /// 是否属于滚动类（构成里上下滚合并展示时用）。
     public var isScroll: Bool {
         switch self {
-        case .scrollUp, .scrollDown, .scrollHorizontal, .scrollSession:
+        case .scrollUp, .scrollDown:
             return true
         default:
             return false
@@ -155,6 +145,14 @@ public struct DailyRecord: Codable, Sendable, Equatable {
     public var pressureTierCounts: [String: Int]
     /// 点击压力累计（pressure × 1000 的整数和），用于平均压力展示。
     public var pressureSumMilli: Int
+    /// 触控板触点热力图：24×16 网格按日触碰计数（行主序，row 0 = 顶行）。
+    /// 触点位置仅按网格聚合，不保存轨迹、原始触点流或屏幕坐标。
+    public var touchGrid: [Int]
+
+    /// 热力图网格规格（提案口径：24×16 = 384 格）。
+    public static let touchGridColumns = 24
+    public static let touchGridRows = 16
+    public static let touchGridCells = touchGridColumns * touchGridRows
 
     public init(date: String,
                 keyCounts: [String: Int] = [:],
@@ -164,7 +162,8 @@ public struct DailyRecord: Codable, Sendable, Equatable {
                 hourlyByOp: [String: [Int]] = [:],
                 activeSeconds: Double = 0,
                 pressureTierCounts: [String: Int] = [:],
-                pressureSumMilli: Int = 0) {
+                pressureSumMilli: Int = 0,
+                touchGrid: [Int] = []) {
         self.date = date
         self.keyCounts = keyCounts
         self.trackpadCounts = trackpadCounts
@@ -174,10 +173,11 @@ public struct DailyRecord: Codable, Sendable, Equatable {
         self.activeSeconds = activeSeconds
         self.pressureTierCounts = pressureTierCounts
         self.pressureSumMilli = pressureSumMilli
+        self.touchGrid = touchGrid
     }
 
-    /// 自定义解码：pressureTierCounts / pressureSumMilli 为 2026-09 增量字段，
-    /// 旧落盘 JSON 不含它们，用 decodeIfPresent 容缺（默认为空 / 0）。
+    /// 自定义解码：pressureTierCounts / pressureSumMilli / touchGrid 为
+    /// 2026-09 增量字段，旧落盘 JSON 不含它们，用 decodeIfPresent 容缺。
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         date = try container.decode(String.self, forKey: .date)
@@ -190,6 +190,7 @@ public struct DailyRecord: Codable, Sendable, Equatable {
         pressureTierCounts = try container.decodeIfPresent([String: Int].self,
                                                            forKey: .pressureTierCounts) ?? [:]
         pressureSumMilli = try container.decodeIfPresent(Int.self, forKey: .pressureSumMilli) ?? 0
+        touchGrid = try container.decodeIfPresent([Int].self, forKey: .touchGrid) ?? []
     }
 
     public func trackpadCount(_ kind: TrackpadOperationKind) -> Int {
@@ -223,7 +224,7 @@ public struct DailyRecord: Codable, Sendable, Equatable {
     /// 允许持久化的顶层字段（隐私不变量测试用）。
     public static let allowedEncodedKeys: Set<String> = [
         "date", "keyCounts", "trackpadCounts", "comboCounts", "buckets", "hourlyByOp", "activeSeconds",
-        "pressureTierCounts", "pressureSumMilli"
+        "pressureTierCounts", "pressureSumMilli", "touchGrid"
     ]
 }
 
@@ -284,8 +285,6 @@ public struct LiveState: Sendable, Equatable {
     public var lastKeyID: String?
     public var lastKeyDownAt: Date?
     public var recentTrackpad: [TrackpadEvent]
-    /// 正在进行中的手势（用于"进行中"标记）。
-    public var gestureInProgress: TrackpadOperationKind?
     /// 观察启动时刻（计算空闲时长基准）。
     public var observationStartedAt: Date?
 
@@ -329,6 +328,8 @@ public struct AggregateSnapshot: Sendable, Equatable {
     public var pressureTierCounts: [PressureTier: Int]
     /// 点击压力累计（pressure × 1000 整数和，多日合并）。
     public var pressureSumMilli: Int
+    /// 触点热力图网格（多日合并，384 格）。
+    public var touchGrid: [Int]
 
     public init(scope: PeriodScope, dayCount: Int, keyPresses: Int, trackpadOps: Int,
                 activeSeconds: Double, keyCounts: [String: Int],
@@ -337,7 +338,8 @@ public struct AggregateSnapshot: Sendable, Equatable {
                 buckets: [TimeBucket], hourlyByOp: [TrackpadOperationKind: [Int]],
                 daySeries: [DaySeriesPoint],
                 pressureTierCounts: [PressureTier: Int] = [:],
-                pressureSumMilli: Int = 0) {
+                pressureSumMilli: Int = 0,
+                touchGrid: [Int] = []) {
         self.scope = scope
         self.dayCount = dayCount
         self.keyPresses = keyPresses
@@ -351,6 +353,7 @@ public struct AggregateSnapshot: Sendable, Equatable {
         self.daySeries = daySeries
         self.pressureTierCounts = pressureTierCounts
         self.pressureSumMilli = pressureSumMilli
+        self.touchGrid = touchGrid
     }
 
     public static func empty(_ scope: PeriodScope) -> AggregateSnapshot {
@@ -403,5 +406,33 @@ public struct AggregateSnapshot: Sendable, Equatable {
     /// 深按样本数（与 Force Touch 同一阈值联动，等于深按档计数）。
     public var pressureDeepCount: Int {
         pressureCount(.deep)
+    }
+
+    /// 热力图网格总触碰次数（多日合并）。
+    public var touchTotal: Int {
+        touchGrid.reduce(0, +)
+    }
+
+    /// 读取网格单元计数（越界返回 0）。
+    public func touchCount(row: Int, column: Int) -> Int {
+        guard row >= 0, row < DailyRecord.touchGridRows,
+              column >= 0, column < DailyRecord.touchGridColumns else { return 0 }
+        let index = row * DailyRecord.touchGridColumns + column
+        guard index < touchGrid.count else { return 0 }
+        return touchGrid[index]
+    }
+
+    /// 网格最热单元（计数与行列），用于"不只依赖颜色"的文字说明与无障碍摘要。
+    public var touchPeak: (count: Int, row: Int, column: Int)? {
+        var best: (count: Int, row: Int, column: Int)?
+        for row in 0..<DailyRecord.touchGridRows {
+            for column in 0..<DailyRecord.touchGridColumns {
+                let count = touchCount(row: row, column: column)
+                if count > 0, count > (best?.count ?? 0) {
+                    best = (count, row, column)
+                }
+            }
+        }
+        return best
     }
 }

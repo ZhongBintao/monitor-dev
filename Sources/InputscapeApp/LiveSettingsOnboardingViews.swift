@@ -98,17 +98,9 @@ struct LiveView: View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 Text("最近触控操作").font(.system(size: 14, weight: .bold)).foregroundColor(Theme.navy)
-                if live.state.recentTrackpad.isEmpty && live.state.gestureInProgress == nil {
+                if live.state.recentTrackpad.isEmpty {
                     Text("尚无触控操作").font(.system(size: 13)).foregroundColor(Theme.secondary)
                 } else {
-                    if let gesture = live.state.gestureInProgress {
-                        HStack(spacing: 8) {
-                            Image(systemName: "hand.draw")
-                            Text("\(gesture.label) · 进行中")
-                        }
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Theme.coral)
-                    }
                     ForEach(live.state.recentTrackpad.prefix(5)) { event in
                         HStack {
                             Image(systemName: iconName(for: event.kind))
@@ -166,16 +158,10 @@ struct LiveView: View {
         case .click: return "cursorarrow.click"
         case .scrollUp: return "arrow.up"
         case .scrollDown: return "arrow.down"
-        case .scrollHorizontal: return "arrow.left.and.right"
-        case .scrollSession: return "arrow.up.and.down.and.arrow.left.and.right"
-        case .zoomIn: return "plus.magnifyingglass"
-        case .zoomOut: return "minus.magnifyingglass"
         case .smartZoom: return "plus.viewfinder"
-        case .zoom: return "plus.magnifyingglass"
-        case .rotateCW: return "rotate.right"
-        case .rotateCCW: return "rotate.left"
         case .swipe: return "hand.draw"
         case .forceTouch: return "hand.point.up.left.fill"
+        case .zoom: return "plus.magnifyingglass"
         }
     }
 }
@@ -269,7 +255,11 @@ struct SettingsView: View {
                     get: { model.deviceProfile.supportsForceTouch },
                     set: { model.setForceTouchSupport($0) }
                 ))
-                Text("首版基准为 MacBook Pro 14/16 英寸 US ANSI 键盘；ISO、JIS 与 Magic Keyboard 模板将在后续版本提供。")
+                Toggle("实验性：触点热力图", isOn: Binding(
+                    get: { model.touchHeatmapEnabled },
+                    set: { model.setTouchHeatmapEnabled($0) }
+                ))
+                Text("触点热力图读取系统触控板多点触控数据，把触点位置按 24×16 网格按日聚合计数（不保存轨迹、原始触点流或屏幕坐标）；设备不支持时无数据。首版基准为 MacBook Pro 14/16 英寸 US ANSI 键盘；ISO、JIS 与 Magic Keyboard 模板将在后续版本提供。")
                     .font(.system(size: 11)).foregroundColor(Theme.tertiary)
             }
         }
@@ -330,6 +320,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     bullet("仅保存本地聚合统计：每日按键数、触控操作数、活跃输入时长、5 分钟桶与键位计数。")
                     bullet("点击压力仅按轻/中/深三档计数并保留平均压力，不保存压力原始值或轨迹。")
+                    bullet("触点热力图仅保存 24×16 网格触碰计数，不保存轨迹、原始触点流或屏幕坐标。")
                     bullet("不记录文字内容、按键序列、应用名称、屏幕坐标或原始事件。")
                     bullet("不提供云同步、导出或账号体系；历史数据持续保留在本机。")
                     bullet("实时观察状态仅保存在内存中，退出即丢弃。")

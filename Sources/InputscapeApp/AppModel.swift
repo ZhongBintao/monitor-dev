@@ -57,6 +57,8 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var permission: PermissionStatus = .unknown
     @Published public private(set) var deviceProfile: DeviceProfile
     @Published public private(set) var reduceMotion = false
+    /// 实验性：触点热力图（设置页开关，UserDefaults 持久化，默认开启）。
+    @Published public private(set) var touchHeatmapEnabled: Bool
     @Published public private(set) var snapshot: AggregateSnapshot
 
     public let store: AggregateStore
@@ -102,6 +104,8 @@ public final class AppModel: ObservableObject {
         self.deviceProfile = saved
         self.status = saved.confirmed ? .permissionDenied : .notOnboarded
         self.reduceMotion = UserDefaults.standard.bool(forKey: "Inputscape.ReduceMotion")
+        self.touchHeatmapEnabled = UserDefaults.standard.object(forKey: "Inputscape.TouchHeatmapEnabled")
+            as? Bool ?? true
         self.snapshot = .empty(.today)
         // 重启场景：回灌今天已落盘的记录，避免当日统计清零。
         engine.loadToday(from: store)
@@ -177,6 +181,7 @@ public final class AppModel: ObservableObject {
             engine.closeSession()
             monitor?.stop()
             LiveModel.shared.clearPressed()
+            updateTouchMonitor()
         case .paused:
             status = permission.granted ? .running : .permissionDenied
             startMonitoringIfAllowed()
@@ -199,6 +204,7 @@ public final class AppModel: ObservableObject {
         startMonitor()
         startIdleSettleTimer()
         observeWorkspace()
+        updateTouchMonitor()
     }
 
     private func startMonitor() {
@@ -238,13 +244,6 @@ public final class AppModel: ObservableObject {
                 let fingersDown = natural ? deltaY > 0 : deltaY < 0
                 track(fingersDown ? .scrollDown : .scrollUp)
             },
-            onScrollHorizontal: { _ in
-                // 横向滚动单类别计数，不分左右（提案口径）。
-                track(.scrollHorizontal)
-            },
-            onScrollSession: {
-                track(.scrollSession)
-            },
             onClick: {
                 track(.click)
             },
@@ -257,31 +256,11 @@ public final class AppModel: ObservableObject {
                 // 三档直方图 + 压力和（引擎内部按开关门控）。
                 engine.ingestPressure(pressure)
             },
-            onZoomIn: {
-                track(.zoomIn)
-            },
-            onZoomOut: {
-                track(.zoomOut)
-            },
             onSmartZoom: {
                 track(.smartZoom)
             },
-            onRotate: { clockwise in
-                track(clockwise ? .rotateCW : .rotateCCW)
-            },
             onSwipe: {
                 track(.swipe)
-            },
-            onMagnifyLive: { isZoomIn in
-                Task { @MainActor in
-                    LiveModel.shared.noteZoomInProgress(zoomIn: isZoomIn)
-                }
-            },
-            onGestureStart: {
-                Task { @MainActor in LiveModel.shared.noteGestureStart() }
-            },
-            onGestureEnd: {
-                Task { @MainActor in LiveModel.shared.noteGestureEnd() }
             }
         )
         let monitor = EventMonitor(handlers: handlers)
@@ -297,6 +276,8 @@ public final class AppModel: ObservableObject {
     /// 空闲超过输入段间隔（60 秒）即结算当前输入段。
     /// 此定时器只调引擎，不 objectWillChange；实时页的空闲秒数
     /// 由 LiveView 里的 TimelineView 自行每秒刷新。
+    /// 结算后顺带落盘：触点热力数据没有事件级 scheduleSave 触发
+    /// （MT 回调线程高频，不进 UI/保存热路径），最多丢一个节拍的数据。
     private func startIdleSettleTimer() {
         LiveModel.shared.markObservationStarted()
         idleSettleTimer?.invalidate()
@@ -307,6 +288,7 @@ public final class AppModel: ObservableObject {
                     self.engine.closeSession()
                 }
                 LiveModel.shared.pruneStaleKeys()
+                self.persistNow()
             }
         }
     }
@@ -437,10 +419,34 @@ public final class AppModel: ObservableObject {
         refresh()
     }
 
-    // MARK: - 减少动效
-
+    /// 减少动效
     public func setReduceMotion(_ value: Bool) {
         reduceMotion = value
         UserDefaults.standard.set(value, forKey: "Inputscape.ReduceMotion")
+    }
+
+    // MARK: - 触点热力图开关（实验性）
+
+    public func setTouchHeatmapEnabled(_ enabled: Bool) {
+        touchHeatmapEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "Inputscape.TouchHeatmapEnabled")
+        updateTouchMonitor()
+    }
+
+    /// 触点监听生命周期与观察状态联动：仅「已确认设备 + 权限齐备 +
+    /// 正在观察 + 功能开启」时运行；暂停 / 撤销权限 / 关闭开关即停止。
+    private func updateTouchMonitor() {
+        let shouldRun = deviceProfile.confirmed
+            && permission.granted
+            && status == .running
+            && touchHeatmapEnabled
+        if shouldRun {
+            let engine = self.engine
+            TouchpointMonitor.shared.start { normalizedX, normalizedY in
+                engine.ingestTouchpoint(normalizedX: normalizedX, normalizedY: normalizedY)
+            }
+        } else {
+            TouchpointMonitor.shared.stop()
+        }
     }
 }

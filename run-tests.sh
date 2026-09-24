@@ -18,13 +18,17 @@ env DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc \
   -parse-as-library -module-name InputscapeKit -enable-testing \
   -emit-module -emit-module-path "$ROOT/.build/xctest/InputscapeKit.swiftmodule" \
   -emit-library -o "$ROOT/.build/xctest/libInputscapeKit.dylib" \
+  -F /System/Library/PrivateFrameworks -framework MultitouchSupport \
   "$ROOT"/Sources/InputscapeKit/*.swift
 
 # 2) 测试 bundle
+# InputscapeKit 依赖 MultitouchSupport（私有框架，TouchpointMonitor），
+# 链接时需显式指向 SDK 的 PrivateFrameworks（与 Package.swift 的 linkerSettings 对应）。
 env DEVELOPER_DIR=/Library/Developer/CommandLineTools swiftc \
   -parse-as-library -I "$XL" -I "$ROOT/.build/xctest" -F "$XCFW" \
   "$ROOT"/Tests/InputscapeKitTests/*.swift \
   -L "$ROOT/.build/xctest" -L "$XL" -lInputscapeKit -lXCTestSwiftSupport -framework XCTest \
+  -F /System/Library/PrivateFrameworks -framework MultitouchSupport \
   -Xlinker -bundle \
   -Xlinker -rpath -Xlinker "$XCFW" \
   -Xlinker -rpath -Xlinker "$XL" \

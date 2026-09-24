@@ -2,8 +2,8 @@
 
 > macOS 14+ 本地输入习惯分析器 · 唯一交接主文档，随开发推进更新
 > 设计契约：`INPUTSCAPE_DESIGN_PLAN.md`（用户 authored，改动需谨慎）
-> 触控板扩展方案：`TOUCHPAD_PROPOSAL.md`（①② 已实施；③④ 待拍板）
-> 最近更新：2026-09-24（触控板增强：手势扩展 + 点击压力分档）
+> 触控板扩展方案：`TOUCHPAD_PROPOSAL.md`（压感短期项 / 热力图已实施；手势口径已收缩）
+> 最近更新：2026-09-24（触点热力图实验性实现 + 手势口径收缩为官方事件直计）
 > 本文件只保留**最终状态与决策**；完整迭代历史见 git log
 
 ---
@@ -17,22 +17,23 @@
 
 ## 二、当前状态
 
-**首版功能完成 + 触控板增强（手势 / 压力）已实施。64/64 测试通过，`build-release.sh` 一键构建/签名/启动。**
+**首版功能完成 + 触控板增强（压感 / 热力图）已实施。62/62 测试通过，`build-release.sh` 一键构建/签名/启动。**
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | 键盘主图规范 | ✅ 完成 | 78 键唯一真值；物理布局对齐 `apple-wireless-keyboard.json`（功能行 1.0357u、command 1.25u、space 5u、四方向键半高、右修饰键右对齐、fn 地球左下+字母右下、Touch ID 矩形键帽+居中指纹圆环、caps LED 点），三页共用同一渲染视图；F3 = `rectangle.3.group` |
 | 键帽样式 | ✅ 完成 | 修饰键图标用标准 Unicode（⌘⌥⇧⌃⇪⌫⏎⇥），F1–F12 用 SF Symbols 描边图标；左侧修饰键图标上/单词下左对齐、右侧 command/option 右对齐；数字/标点双层居中；键帽小圆角（0.09u）、画布四周 0.1u 留白 |
-| 聚合引擎 | ✅ 完成 | 60s 输入段 / 5 分钟桶 / 跨天 / 预设周期与自定义起止快照（含同日区间）/ 组合键计数 / 点击压力三档直方图 |
-| 本地存储 | ✅ 完成 | 按日 JSON + 白名单 schema（date/keyCounts/comboCounts/trackpadCounts/buckets/hourlyByOp/activeSeconds/pressureTierCounts/pressureSumMilli），隐私测试守护；增量字段旧 JSON 容缺解码 |
-| 监听层 | ✅ 完成（待真机授权验证） | keyDown/keyUp + flagsChanged（修饰键含释放）+ systemDefined（F 行媒体键含释放）+ 特殊键码；**全事件 tap + 手势过滤**（缩放/旋转/智能缩放/轻扫/滚动会话/压力）；只输出键位 ID / 操作类别 / 组合和弦 |
+| 聚合引擎 | ✅ 完成 | 60s 输入段 / 5 分钟桶 / 跨天 / 预设周期与自定义起止快照（含同日区间）/ 组合键计数 / 点击压力三档直方图 / 触点 24×16 网格聚合 |
+| 本地存储 | ✅ 完成 | 按日 JSON + 白名单 schema（date/keyCounts/comboCounts/trackpadCounts/buckets/hourlyByOp/activeSeconds/pressureTierCounts/pressureSumMilli/touchGrid），隐私测试守护；增量字段旧 JSON 容缺解码 |
+| 监听层 | ✅ 完成（待真机授权验证） | keyDown/keyUp + flagsChanged（修饰键含释放）+ systemDefined（F 行媒体键含释放）+ 特殊键码；**全事件 tap 过滤官方手势事件**（smartMagnify/swipe 直计）；只输出键位 ID / 操作类别 / 组合和弦 |
 | 组合键统计 | ✅ 完成 | 修饰键按住 + 普通键按下 → 和弦（⌘C / ⇧⌘3 / 三键）；150ms 去抖；实时页 + 键盘分布 Top5 + 总览摘要 |
-| 触控板操作统计 | ✅ 完成（待真机验证） | 13 类操作类别：点击/上滚/下滚/横向滚动/滚动会话/放大/缩小/智能缩放/顺时针/逆时针旋转/滑动/Force Touch/zoom（历史口径，仅旧数据可见）；压力分布卡（三档占比 + 平均压力 + 深按次数）；`supportsForceTouch=false` 时压力卡隐藏且停采 |
+| 触控板操作统计 | ✅ 完成（待真机验证） | 官方事件直计口径：点击/上滚/下滚/智能缩放/滑动/Force Touch + zoom（历史口径，仅旧数据可见）；压力分布卡（三档占比 + 平均压力 + 深按次数）；`supportsForceTouch=false` 时压力卡隐藏且停采。**自定义识别口径（缩放分向/旋转/横滚/滚动会话）已按用户决策删除** |
+| 触点热力图（实验性） | ✅ 完成（待真机验证） | TouchpointMonitor：MultitouchSupport 私有框架最小桥（接口事实取自 calftrail/Touch、M5MultitouchSupport、Kyome22/OpenMultitouchSupport）；making/touching 触点归一化坐标 → 24×16 网格按日聚合；设置页开关（默认开）+ 观察状态联动；触控板页热力卡（圆角面板 + 珊瑚红色阶 + 点按选格读数 + 最热区域文字）；无设置开关/设备不支持时空态 |
 | 自定义统计区间 | ✅ 完成 | 三段状态机（开始 → 结束不早于开始，**允许同一天** → 点击重置）；开始/结束输入框一行排布，支持键入 `YYYY-MM-DD` / 缺前导零 / `20260913` 八位无分隔符（补零、超月收敛、非法回退）；日历跟手 pager 翻页（拖拽/双指横扫/箭头，方向性滑动过渡）；端点带「开始/结束」标记；标题按区间显示中文日期（跨年补年份） |
-| 实时反馈 | ✅ 完成 | 三类键释放闭环，按下点亮缩放、松开即灭、无残留；放大手势进行中按净方向即时显示 |
+| 实时反馈 | ✅ 完成 | 三类键释放闭环，按下点亮缩放、松开即灭、无残留 |
 | 七页面 UI | ✅ 完成 | 总览 / 键盘分布 / 触控板操作 / 使用趋势 / 实时观察 / 设置 + 三步引导；侧栏每项带 SF Symbol 图标；ⓘ 说明为 AppKit 原生 Tooltip |
 | 夜览模式 | ✅ 完成 | 设置页三档显示模式（开启夜览 / 关闭夜览 / 跟随系统），UserDefaults 持久化、重启保持；`Theme` 全量语义色动态化（明暗双套色板），切换即时生效无需重启 |
-| XCTest 测试 | ✅ 64/64 | 布局规范 14（含 JSON 等价性、方向键底对齐、高度归一）、聚合 11、存储 5、隐私 5、键码映射 8、显示模式 5、触控板增强 16（压力阈值 / 手势方向 / 引擎聚合 / 旧 JSON 容缺 / 白名单） |
+| XCTest 测试 | ✅ 62/62 | 布局规范 14（含 JSON 等价性、方向键底对齐、高度归一）、聚合 11、存储 5、隐私 5、键码映射 8、显示模式 5、触控板增强 14（压力阈值 / 网格映射 / 聚合 / 旧 JSON 容缺 / 白名单） |
 
 ## 三、代码结构
 
@@ -47,16 +48,16 @@ monitor-dev/
 │   ├── KeyboardLayoutSpec.swift     # ★ 78 键主键盘图唯一真值（几何源自 JSON + KeyGlyph/KeycapStyle 逐键定义）
 │   ├── AppearanceMode.swift         # 显示模式三档枚举 + UserDefaults 持久化（可测）
 │   ├── KeyCodeMapper.swift          # kVK 键码→键位 ID + 媒体键/fn 改写键码映射 + ComboKeyBuilder
-│   ├── AggregationEngine.swift      # 聚合：60s 输入段 / 288 桶 / 跨天 / 两种快照 / 压力直方图
+│   ├── AggregationEngine.swift      # 聚合：60s 输入段 / 288 桶 / 跨天 / 两种快照 / 压力直方图 / 触点网格
 │   ├── AggregateStore.swift         # 按日 JSON 存储（原子写、白名单 schema）
-│   ├── EventMonitor.swift           # CGEventTap（全事件掩码，主 run loop）+ 键盘/手势/压力分类 + 权限中心
-│   ├── GestureSessionTracker.swift  # 单手势会话方向判定（纯逻辑可测：净缩放/净旋转 → zoomIn/Out、rotateCW/CCW）
+│   ├── EventMonitor.swift           # CGEventTap（全事件掩码，主 run loop）+ 键盘/官方手势/压力分类 + 权限中心
+│   ├── TouchpointMonitor.swift      # ★ MultitouchSupport 最小桥（@_silgen_name 绑定 + MTTouch 布局转写 + 全局回调路由）
 │   └── Models.swift                 # DailyRecord / TimeBucket / PressureTier / LiveState / 快照等
 ├── Sources/InputscapeApp/           # SwiftUI 应用
 │   ├── KeyboardHeatmapView.swift    # ★ 唯一键盘渲染视图（三页共用，键帽样式渲染 + 画布外边距）
 │   ├── AppearanceManager.swift      # 夜览切换核心：NSApp.appearance 应用 + 系统深浅色监听
 │   ├── WindowChrome.swift           # 无标题栏窗口的拖拽补回（isMovableByWindowBackground）
-│   ├── AppModel.swift               # 主模型（状态/快照/持久化；高频事件不经此失效全树）
+│   ├── AppModel.swift               # 主模型（状态/快照/持久化；高频事件不经此失效全树）+ 触点监听生命周期
 │   ├── LiveModel.swift              # 实时状态（pressedKeys/heldChips，按键只失效实时页）
 │   ├── AppKitTooltip.swift          # ⓘ 原生 Tooltip 桥接（NSView.toolTip）
 │   ├── CustomRangePicker.swift      # ★ 自定义区间弹层（三段状态机 + 键盘输入 + 跟手 pager）
@@ -64,21 +65,22 @@ monitor-dev/
 │   ├── Theme.swift                  # ★ 全量语义色（NSColor dynamicProvider 明暗双套色板）
 │   ├── Components.swift             # 卡片 / 周期切换 / 状态横幅 / 空状态 / Tooltip 标记
 │   ├── OverviewAndKeyboardViews.swift   # 总览 + 键盘分布
-│   ├── TrackpadAndTrendsViews.swift     # 触控板操作（构成/时段/压力/排行） + 使用趋势
+│   ├── TrackpadAndTrendsViews.swift     # 触控板操作（构成/时段/压力/热力/排行） + 使用趋势
 │   └── LiveSettingsOnboardingViews.swift # 实时观察 + 设置 + 首次引导
-└── Tests/InputscapeKitTests/        # 64 个 XCTest 用例（7 个文件）
+└── Tests/InputscapeKitTests/        # 62 个 XCTest 用例（6 个文件）
 ```
 
 ## 四、构建 / 测试 / 运行
 
 ```bash
 ./build-release.sh   # 一键：release 构建（exit 校验）→ 稳定签名 → 重启
-./run-tests.sh       # 64 个测试（CLT 编 Kit + Xcode XCTest.framework 链接 + xctest 运行器）
+./run-tests.sh       # 62 个测试（CLT 编 Kit + Xcode XCTest.framework 链接 + xctest 运行器）
 ```
 
 - 签名用钥匙串中的 **Apple Development 证书**（TeamID Y99GV96XD6）——签名身份稳定，**TCC 授权跨构建保留**；ad-hoc 签名（`-s -`）会每次重置授权，已弃用。证书约 1 年有效期，续订后需再授权一次。
 - 签名/codesign 访问钥匙串，沙箱内会被拦，需非沙箱执行。
 - 运行前置：系统设置 › 隐私与安全性 › 输入监听 + 辅助功能（启动时未授权会自动弹申请）。
+- **MultitouchSupport 私有框架链接**（TouchpointMonitor）：Package.swift 用 `unsafeFlags`、run-tests.sh 用 `-F /System/Library/PrivateFrameworks -framework MultitouchSupport`——路径不带 SDK 前缀，链接器自动以 sysroot 前缀化，升级 SDK 无需改动。历史上触点采集无需额外 TCC 权限，需真机确认。
 
 ## 五、本机工具链备注
 
@@ -108,17 +110,17 @@ monitor-dev/
 16. **日历跟手 pager**：三联网格（上一月 | 当前月 | 下一月）+ `dragOffset` 跟手位移；单月网格为 **Equatable 子视图**（比较 month/startDay/endDay，挂 `.equatable()`）——拖动中三者不变即跳过全网格重建，每帧只剩 offset 合成（跟手性能的关键）；网格用确定性 `Grid`（非 Lazy，防滑入 popping）。触发判定五路并行：位移 ≥ 面板宽 1/9（32pt）/ 快甩（预测终点 ≥ 1/4 宽且同向）/ 拖过面板 55% 中途翻页 / 双指动量满额延续带过阈值 / 都不满足弹回。**`gestureCommitted` 保证一次手势流只翻一页**，其生命周期必须覆盖 phase 流与 momentum 流的所有结束路径（漏复位会冻结 pager）。
 17. **ForEach 身份唯一性红线**：日历网格的空占位格（nil）绝不能用 `Date?.self` 作 ForEach 身份——一行内多个 nil 共享身份会使 SwiftUI diff 未定义（实测：端点标记残留、区间带断档）。格子 id 用行内列下标。
 18. **诊断钩子**（环境变量，仅开发验证用）：`INPUTSCAPE_PAGE=<page>` 指定初始页（首帧后切换——**init 阶段直接设 page 会导致状态栏不绘制**）、`INPUTSCAPE_RANGE=start:end` 应用区间、`INPUTSCAPE_OPEN_CUSTOM_RANGE=1` 开弹层、`INPUTSCAPE_PICKER_START=iso` 强制"已选开始待选结束"态、`INPUTSCAPE_DEBUG_EVENTS=1` 开启事件探针（tap 看到的 keyDown 键码与全部 systemDefined 事件落 /tmp/inputscape-events.log，用于特殊功能键投递形态排查；触控板增强后兼记手势与压力事件数值，作为 `.pressure` 全局可达性探针）。
-19. **触控板手势走全事件 tap，不走 NSEvent 全局监听**（2026-09-24）：系统不向 `NSEvent.addGlobalMonitorForEvents` 投递手势事件（旧路线缩放/滑动计数恒 0），但对 listen-only CGEventTap 会以原始数值类型投递，与 NSEvent 手势类型一一对应（rotate 18 / beginGesture 19 / endGesture 20 / gesture 29 / magnify 30 / swipe 31 / smartMagnify 32 / pressure 34，来源 AppKit NSEvent.h + SO #1383528 / rift 路线，全公开 API）。tap 掩码扩到 `~0`（kCGEventMaskForAllEvents），回调按 rawValue 过滤（过滤集用 `NSEvent.EventType` 运行时取值构造）后 `NSEvent(cgEvent:)` 转换；非手势事件只付一次 switch + 集合查找。**NSEvent 全局手势监听已删除。**
-20. **缩放 / 旋转按净方向一次手势计 1 次**：`GestureSessionTracker`（Kit 纯逻辑，可测）在 beginGesture→endGesture 间收集——`magnification` 是逐事件增量（SDK 头文件口径），直接累加；`rotation` 按累计角度帧间差分累加，符号约定**正值 = 逆时针，待真机标定**；阈值 |净缩放| ≥ 0.01、|净角度| ≥ 2° 滤误触。beginGesture 先结算悬挂会话（防 endGesture 丢失）。历史口径：方向拆分前的 `zoom` 类别保留为「缩放（历史）」，旧数据可见、不再新增。
-21. **滚动会话用 scrollWheel phase 判定，不用 beginGesture→endGesture**（对提案 §一机制的有意偏差）：捏合缩放也走 beginGesture，会把缩放误计为滚动会话；scrollWheel 自带 phase（began 0x1 / ended 0x8 / cancelled 0x10 / mayBegin 0x20，AppKit NSEvent.h），mayBegin/began 开会话、ended/cancelled 结算，一次接触计 1 次，动量（phase=0）与滚轮鼠标不计。横向滚动（deltaX）单类别计数不分左右。
-22. **点击压力三档直方图 + Force Touch 联动**：leftMouseDown 的 `kCGMouseEventPressure` 按 `PressureTier` 分轻（<0.4）/ 中（0.4–0.9）/ 深（≥0.9），**深按档阈值即 Force Touch 计数阈值**（替换未标定的 1.5 经验值——旧阈值形同虚设）。存储为 DailyRecord 新增白名单字段 `pressureTierCounts`（三档计数）+ `pressureSumMilli`（压力×1000 整数和，展示平均压力）；压力是点击的派生维度：**不进 5 分钟桶 / 时段分布 / 活跃输入段**（与组合键同口径），旧 JSON 用 `decodeIfPresent` 容缺解码。设置开关 `supportsForceTouch` 现在真正生效：关闭时引擎停采压力、深按不计数、触控板页压力卡整卡隐藏。
-23. **触控板构成卡只显示有数据的类别**（13 类后零行太多），占比按有数据部分归一；压力分布卡含 ⓘ 说明与三档数字/百分比（不只依赖颜色）。
+19. **触控板手势走全事件 tap，只消费官方事件直计类别**（2026-09-24 定稿）：系统不向 `NSEvent.addGlobalMonitorForEvents` 投递手势事件（旧路线计数恒 0），但对 listen-only CGEventTap 会以原始数值类型投递，与 NSEvent 手势类型同号（smartMagnify 32 / swipe 31，来源 AppKit NSEvent.h + SO #1383528 / rift 路线，全公开 API）。tap 掩码为 `~0`，回调按 rawValue 过滤（过滤集用 `NSEvent.EventType` 运行时取值构造）后 `NSEvent(cgEvent:)` 转换；非手势事件只付一次 switch + 集合查找。**NSEvent 全局手势监听已删除。**
+20. **手势口径收缩（2026-09-24 用户决策）**：只保留「Apple 官方事件直接计数」——smartZoom（smartMagnify 事件）与 swipe（swipe 事件），收到即计 1 次，无任何自定义判定逻辑；缩放分向 / 旋转 / 横滚 / 滚动会话等自定义识别口径（及 GestureSessionTracker）已全部删除、无残留。真机验证后若 smartMagnify/swipe 投递不可靠，整组事件级手势也可下线。历史口径：`zoom` 保留为「缩放（历史）」，旧数据可见、不再新增。
+21. **点击压力三档直方图 + Force Touch 联动**：leftMouseDown 的 `kCGMouseEventPressure` 按 `PressureTier` 分轻（<0.4）/ 中（0.4–0.9）/ 深（≥0.9），**深按档阈值即 Force Touch 计数阈值**（替换未标定的 1.5 经验值——旧阈值形同虚设；0.4/0.9 仍待真机标定）。存储为 DailyRecord 白名单字段 `pressureTierCounts` + `pressureSumMilli`（压力×1000 整数和，展示平均压力）；压力是点击的派生维度：**不进 5 分钟桶 / 时段分布 / 活跃输入段**（与组合键同口径），旧 JSON 用 `decodeIfPresent` 容缺解码。设置开关 `supportsForceTouch` 真正生效：关闭时引擎停采压力、深按不计数、触控板页压力卡整卡隐藏。
+22. **触点热力图 = MultitouchSupport 最小桥（实验性，2026-09-24 用户授权）**：不引第三方依赖，Kit 内 `@_silgen_name` 绑定 + Swift 转写 MTTouch 布局——接口事实取自三个成熟开源实现（calftrail/Touch 的头文件、M5MultitouchSupport、Kyome22/OpenMultitouchSupport，代码注释保留出处），链接走 `-F /System/Library/PrivateFrameworks`（sysroot 相对路径，SDK 升级免改）。要点：回调无 refcon，经全局路由表派发；只消费 state 3(making)/4(touching)，输出归一化坐标（x 左→右、y 上→下）；`@convention(c)` 签名不能含 Swift struct → 传 `UnsafeMutableRawPointer` 按 stride load，start 时断言 `MemoryLayout<MTTouchC>.stride == 96` 守护布局；`MTDeviceCreateList` 的 +1 由 Swift ARC 接管（CFRelease 不可用）。引擎只做 24×16 格子累加（不进桶/时段/活跃段），触点数据靠 5s 结算定时器节流落盘（MT 回调高频，不进保存热路径）。
+23. **触控板构成卡只显示有数据的类别**，占比按有数据部分归一；压力分布卡与热力图卡均含 ⓘ 说明 + 数字/文字读数（不只依赖颜色）；热力图面板为 Canvas 单次绘制（384 格无逐格视图），点按选格读数。
 
 ## 七、已知边界与风险
 
 - **F5/F6（听写/勿扰）无法计数**：默认系统设置下无公开可观察事件；用户开启「F1–F12 作为标准功能键」后可计数。
-- **手势 / 压力 / 滚动会话计数待真机验证**：全事件 tap 路线的手势投递（缩放/旋转/智能缩放/轻扫）、`.pressure` 事件全局可达性、滚动会话 phase 判定、旋转方向符号约定（当前按正值=逆时针）与压力三档阈值（0.4/0.9）都需真机标定一次；`INPUTSCAPE_DEBUG_EVENTS=1` 探针可一并确认。按键/点击/滚动/修饰键/媒体键走 CGEventTap，可靠。
-- **触控板增强 ③④（触点热力图 / 连续压力）未实施**：涉及私有框架 MultitouchSupport 与隐私边界扩张，按提案 §五等用户拍板（方案见 TOUCHPAD_PROPOSAL.md）。
+- **官方手势 / 压力待真机验证**：smartMagnify/swipe 经全事件 tap 的实际投递、压力三档阈值（0.4/0.9）都需真机确认或标定；若 smartMagnify/swipe 投递不可靠，事件级手势整组下线。按键/点击/滚动/修饰键/媒体键走 CGEventTap，可靠。`INPUTSCAPE_DEBUG_EVENTS=1` 探针可一并确认。
+- **触点热力图（实验性）待真机验证**：MultitouchSupport 历史上无需额外 TCC 权限、接口十余年稳定，但 macOS 大版本更新可能失效——失效时自动空态，不影响其他功能；MTTouch 布局与坐标方向（y 上→下）以真机数据核对一次。
 - **监听链路未做真机授权验证**：需在真实会话授权后确认计数、实时高亮、休眠挂起；F3/F4 特殊键码（130/131）在 macOS 26 的实际投递待确认。
 - **ⓘ 提示为系统原生 Tooltip**：显示延迟与样式由系统控制（约 1s+），换取绝对稳定。
 - F 行图标映射按 2021 MBP 文档口径，与实物出入只需改 `KeyboardLayoutSpec` 一处。
@@ -128,11 +130,10 @@ monitor-dev/
 
 ## 八、下一步（按优先级）
 
-1. **真机授权实测**：按键/修饰键/组合键/F 行媒体键计数、实时高亮、休眠挂起；确认 F3/F4 键码投递；**触控板增强一轮真机标定**：手势投递与方向、`.pressure` 可达性与三档阈值、滚动会话计数、旋转符号约定（`INPUTSCAPE_DEBUG_EVENTS=1` 探针）；顺带确认日历翻页手感与上下滑标签方向。
+1. **真机授权实测**：按键/修饰键/组合键/F 行媒体键计数、实时高亮、休眠挂起；确认 F3/F4 键码投递；**触控板增强真机标定**：smartMagnify/swipe 投递、压力三档阈值、热力图触点分布与坐标方向（`INPUTSCAPE_DEBUG_EVENTS=1` 探针）；顺带确认日历翻页手感与上下滑标签方向。
 2. **键盘快照回归**：用 `scrollWhenNarrow` 离屏渲染管线生成 78 键基线图纳入测试（keyboard-preview.png 即管线产物）。
-3. **触控板增强 ③④**：触点热力图（MultitouchSupport 私有框架桥）+ 压感长期项——**等用户对提案 §五四个决策点拍板后实施**（隐私边界 / 私有框架定位 / 依赖方式 / 手势粒度已按建议口径落地 ①②）。
-4. **后续模板**：ISO / JIS / Magic Keyboard（设置页当前固定 US ANSI）。
-5. **可选**：自定义暂停快捷键（KeyboardShortcuts 依赖需过审查）；数据保留策略。
+3. **后续模板**：ISO / JIS / Magic Keyboard（设置页当前固定 US ANSI）。
+4. **可选**：自定义暂停快捷键（KeyboardShortcuts 依赖需过审查）；数据保留策略；压感长期项（手指连续压力分布，随热力图链路顺带，需用户再授权）。
 
 ## 九、开发阶段简史（详节见 git log）
 
@@ -142,4 +143,5 @@ monitor-dev/
 | 键盘 UI 精修 | 09-22 深夜 | 物理布局对齐实测 JSON、键帽样式逐键精修（半高方向键 / Unicode 字形 / 描边图标 / Touch ID 矩形键帽）、git 仓库建立 |
 | 夜览与顶栏 | 09-23 上午 | 夜览模式（三档显示模式 + Theme 动态颜色 + 持久化）；顶栏重构（无标题栏 + HStack 分栏，状态栏贴顶）；侧栏 SF Symbol 图标 |
 | 自定义区间弹层 | 09-23 | 弹层重做（输入框键盘输入 / 三段选期状态机 / 同日区间 / 跟手 pager 翻页动画）；滚动方向语义修复（上下滑标签 + 左右切月）；日历高亮双 bug 根因修复（ForEach 重复 id） |
-| 触控板增强 ①② | 09-24 | 手势扩展（全事件 tap + 手势过滤：缩放分向/旋转/智能缩放/轻扫/横滚/滚动会话）+ 点击压力三档直方图与 Force Touch 阈值联动（0.9）；压力分布卡；存储白名单加 pressureTierCounts/pressureSumMilli（旧 JSON 容缺）；测试 48→64。分支 `feature/trackpad-enhancement`；③④ 等拍板 |
+| 触控板增强 ①② | 09-24 | 手势扩展（全事件 tap + 手势过滤：缩放分向/旋转/智能缩放/轻扫/横滚/滚动会话）+ 点击压力三档直方图与 Force Touch 阈值联动（0.9）；压力分布卡；存储白名单加 pressureTierCounts/pressureSumMilli（旧 JSON 容缺）；测试 48→64。分支 `feature/trackpad-enhancement` |
+| 热力图 + 口径收缩 | 09-24 | 用户实测反馈识别不准后拍板：**删除全部自定义手势识别**（缩放分向/旋转/横滚/滚动会话/GestureSessionTracker，仅留官方 smartMagnify/swipe 事件直计）；**触点热力图实验性转正**——MultitouchSupport 最小桥（接口事实取自 calftrail/M5/Kyome22）+ 24×16 网格聚合 + 热力卡 UI + 设置开关 + touchGrid 白名单字段；设计契约 §7/§9 边界按授权修订；测试 64→62 |
