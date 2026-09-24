@@ -104,6 +104,11 @@ public final class EventMonitor: @unchecked Sendable {
         }
     }
 
+    /// Force Touch 深按判定阈值（kCGMouseEventPressure，点击瞬间口径）。
+    /// 与手指压力分档（PressureTier，MTTouch 连续压力口径）值域不同，独立标定；
+    /// 经验值 0.9，待 INPUTSCAPE_DEBUG_EVENTS 探针真机校准。
+    public static let forceTouchClickThreshold: Double = 0.9
+
     /// 组合键去抖：同一和弦在窗口内视为按键重复，不重复计数。
     public static let comboDebounceInterval: TimeInterval = 0.15
 
@@ -121,6 +126,11 @@ public final class EventMonitor: @unchecked Sendable {
 
     private static func debugLog(_ line: String) {
         guard debugEvents else { return }
+        debugLogForProbe(line)
+    }
+
+    /// 探针日志写入口（调用方自行 env 门控；TouchpointMonitor 触点探针复用）。
+    static func debugLogForProbe(_ line: String) {
         debugLock.lock(); defer { debugLock.unlock() }
         let text = "\(String(format: "%.3f", Date().timeIntervalSince1970)) \(line)\n"
         let data = Data(text.utf8)
@@ -341,13 +351,17 @@ public final class EventMonitor: @unchecked Sendable {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             if type == .leftMouseDown {
                 let pressure = event.getDoubleValueField(.mouseEventPressure)
-                // 深按档阈值与 Force Touch 计数联动（PressureTier.deepThreshold）。
-                if pressure >= PressureTier.deepThreshold {
+                if Self.debugEvents {
+                    Self.debugLog("clickPressure pressure=\(pressure)")
+                }
+                // 深按判定（kCGMouseEventPressure 值域独立标定）。
+                if pressure >= Self.forceTouchClickThreshold {
                     handlers.onForceTouch?()
                 } else {
                     handlers.onClick?()
                 }
-                // 三档压力直方图（引擎侧按 Force Touch 开关门控采集）。
+                // 点击瞬间压力样本（探针用途；强度分布统计已改用
+                // MTTouch 手指连续压力——该字段多数触控板不随力度变化）。
                 handlers.onPressure?(pressure)
             } else {
                 handlers.onClick?()

@@ -77,24 +77,29 @@ public final class AggregationEngine: @unchecked Sendable {
         return forceTouchEnabled
     }
 
-    /// 记一次点击压力样本（leftMouseDown 的 kCGMouseEventPressure，0–1+）。
-    /// 按 PressureTier 阈值分轻/中/深三档累计直方图并累加压力和（毫级整数）。
-    /// 压力分档是点击的派生维度：不进 5 分钟桶、时段分布与活跃输入段
-    /// （与组合键同样的口径），深按档样本对应的点击已计入 forceTouch 类别。
-    public func ingestPressure(_ pressure: Double, at date: Date? = nil) {
+    // MARK: - 手指按压强度
+
+    /// 记一次手指按压样本（MTTouch 手指压力 0–1 连续值，接触中每帧一条）。
+    /// 按帧累计即按压时长权重：直方图反映「压力 × 停留时间」分布，
+    /// 无需节流（纯整数累加，125Hz×触点数开销可忽略）；
+    /// 不进 5 分钟桶、时段分布，也不延长活跃输入段。
+    /// 注：旧方案 kCGMouseEventPressure（点击瞬间标量）已废弃——
+    /// 该字段多数触控板不随按压力度变化，无区分度（探针可证实）。
+    public func ingestTouchPressure(_ pressure: Double, at date: Date? = nil) {
         lock.lock(); defer { lock.unlock() }
-        guard forceTouchEnabled else { return }
         let t = date ?? now()
         rolloverIfNeeded(at: t)
-        let tier = PressureTier.classify(pressure)
-        record.pressureTierCounts[tier.rawValue, default: 0] += 1
-        record.pressureSumMilli += Int((pressure * 1000).rounded())
+        let bucket = PressureTier.bucketIndex(pressure)
+        if record.touchPressureHistogram.count != PressureTier.histogramBuckets {
+            record.touchPressureHistogram = Array(repeating: 0, count: PressureTier.histogramBuckets)
+        }
+        record.touchPressureHistogram[bucket] += 1
     }
 
     // MARK: - 触点热力图
 
     /// 记一次触点（归一化坐标 0–1，x 左→右，y 上→下）。
-    /// 触点位置只按 24×16 网格按日聚合计数；触点是"存在"而非"操作"：
+    /// 触点位置只按 96×64 网格按日聚合计数；触点是"存在"而非"操作"：
     /// 不进 5 分钟桶、时段分布，也不延长活跃输入段。
     /// 由 MT 内部线程高频调用（~125Hz×触点数），只做格子累加。
     public func ingestTouchpoint(normalizedX: Double, normalizedY: Double, at date: Date? = nil) {
@@ -249,9 +254,8 @@ public final class AggregationEngine: @unchecked Sendable {
         var comboCounts: [String: Int] = [:]
         var trackpadCounts: [String: Int] = [:]
         var hourly: [String: [Int]] = [:]
-        var pressureTierCounts: [String: Int] = [:]
-        var pressureSumMilli = 0
         var touchGrid = Array(repeating: 0, count: DailyRecord.touchGridCells)
+        var touchPressureHistogram = Array(repeating: 0, count: PressureTier.histogramBuckets)
         var activeSeconds = 0.0
 
         for day in historical {
@@ -262,9 +266,8 @@ public final class AggregationEngine: @unchecked Sendable {
                 let dst = hourly[k] ?? Array(repeating: 0, count: 24)
                 hourly[k] = zip(dst, series).map { $0 + $1 }
             }
-            for (k, v) in day.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
-            pressureSumMilli += day.pressureSumMilli
             mergeTouchGrid(&touchGrid, day.touchGrid)
+            mergeHistogram(&touchPressureHistogram, day.touchPressureHistogram)
             activeSeconds += day.activeSeconds
         }
         for (k, v) in todayMerged.keyCounts { keyCounts[k, default: 0] += v }
@@ -274,9 +277,8 @@ public final class AggregationEngine: @unchecked Sendable {
             let dst = hourly[k] ?? Array(repeating: 0, count: 24)
             hourly[k] = zip(dst, series).map { $0 + $1 }
         }
-        for (k, v) in todayMerged.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
-        pressureSumMilli += todayMerged.pressureSumMilli
         mergeTouchGrid(&touchGrid, todayMerged.touchGrid)
+        mergeHistogram(&touchPressureHistogram, todayMerged.touchPressureHistogram)
         activeSeconds += todayMerged.activeSeconds
 
         // 桶：历史日按星期内聚合意义有限，快照桶 = 最近 dayCount 天逐桶求和。
@@ -303,10 +305,6 @@ public final class AggregationEngine: @unchecked Sendable {
         var hourlyKind: [TrackpadOperationKind: [Int]] = [:]
         for kind in TrackpadOperationKind.allCases {
             hourlyKind[kind] = hourly[kind.rawValue] ?? Array(repeating: 0, count: 24)
-        }
-        var pressureKindCounts: [PressureTier: Int] = [:]
-        for tier in PressureTier.allCases {
-            pressureKindCounts[tier] = pressureTierCounts[tier.rawValue] ?? 0
         }
 
         // 按日序列（旧 → 新），今天在内；零数据日不出现（保持趋势图空态语义）。
@@ -341,15 +339,27 @@ public final class AggregationEngine: @unchecked Sendable {
             buckets: mergedBuckets,
             hourlyByOp: hourlyKind,
             daySeries: series,
-            pressureTierCounts: pressureKindCounts,
-            pressureSumMilli: pressureSumMilli,
-            touchGrid: touchGrid
+            touchGrid: touchGrid,
+            touchPressureHistogram: touchPressureHistogram
         )
     }
 
-    /// 触点网格逐格累加（容忍长度不符的旧记录，缺省视为空网格）。
+    /// 触点网格逐格累加：source 为旧 24×16 网格时先 4×4 上采样再合并
+    /// （兼容任何来源的旧格式数据，不依赖 JSON 解码路径）。
     private func mergeTouchGrid(_ target: inout [Int], _ source: [Int]) {
         guard target.count == DailyRecord.touchGridCells else { return }
+        if source.count == DailyRecord.legacyTouchGridCells {
+            mergeTouchGrid(&target, DailyRecord.upsampleLegacyTouchGrid(source))
+            return
+        }
+        for (index, value) in source.enumerated() where index < target.count {
+            target[index] += value
+        }
+    }
+
+    /// 压力直方图逐桶累加（容忍长度不符）。
+    private func mergeHistogram(_ target: inout [Int], _ source: [Int]) {
+        guard target.count == PressureTier.histogramBuckets else { return }
         for (index, value) in source.enumerated() where index < target.count {
             target[index] += value
         }
@@ -421,9 +431,8 @@ public final class AggregationEngine: @unchecked Sendable {
         var comboCounts: [String: Int] = [:]
         var trackpadCounts: [String: Int] = [:]
         var hourly: [String: [Int]] = [:]
-        var pressureTierCounts: [String: Int] = [:]
-        var pressureSumMilli = 0
         var touchGrid = Array(repeating: 0, count: DailyRecord.touchGridCells)
+        var touchPressureHistogram = Array(repeating: 0, count: PressureTier.histogramBuckets)
         var bucketMap: [Int: TimeBucket] = [:]
         var activeSeconds = 0.0
 
@@ -435,9 +444,8 @@ public final class AggregationEngine: @unchecked Sendable {
                 let dst = hourly[k] ?? Array(repeating: 0, count: 24)
                 hourly[k] = zip(dst, series).map { $0 + $1 }
             }
-            for (k, v) in day.pressureTierCounts { pressureTierCounts[k, default: 0] += v }
-            pressureSumMilli += day.pressureSumMilli
             mergeTouchGrid(&touchGrid, day.touchGrid)
+            mergeHistogram(&touchPressureHistogram, day.touchPressureHistogram)
             for b in day.buckets {
                 if var existing = bucketMap[b.index] {
                     existing.keyboard += b.keyboard
@@ -457,10 +465,6 @@ public final class AggregationEngine: @unchecked Sendable {
         var hourlyKind: [TrackpadOperationKind: [Int]] = [:]
         for kind in TrackpadOperationKind.allCases {
             hourlyKind[kind] = hourly[kind.rawValue] ?? Array(repeating: 0, count: 24)
-        }
-        var pressureKindCounts: [PressureTier: Int] = [:]
-        for tier in PressureTier.allCases {
-            pressureKindCounts[tier] = pressureTierCounts[tier.rawValue] ?? 0
         }
 
         // 按日序列（旧 → 新），零数据日不出现。
@@ -482,9 +486,8 @@ public final class AggregationEngine: @unchecked Sendable {
             buckets: bucketMap.values.sorted { $0.index < $1.index },
             hourlyByOp: hourlyKind,
             daySeries: series,
-            pressureTierCounts: pressureKindCounts,
-            pressureSumMilli: pressureSumMilli,
-            touchGrid: touchGrid
+            touchGrid: touchGrid,
+            touchPressureHistogram: touchPressureHistogram
         )
     }
 }

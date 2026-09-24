@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 import InputscapeKit
 
 /// 监听与运行状态（覆盖设计文档 §6 必须状态）。
@@ -57,8 +58,8 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var permission: PermissionStatus = .unknown
     @Published public private(set) var deviceProfile: DeviceProfile
     @Published public private(set) var reduceMotion = false
-    /// 实验性：触点热力图（设置页开关，UserDefaults 持久化，默认开启）。
-    @Published public private(set) var touchHeatmapEnabled: Bool
+    /// 触点热力图显示模式（设置页选择，UserDefaults 持久化；数据层统一 96×64）。
+    @Published public private(set) var heatmapDisplayMode: HeatmapDisplayMode
     @Published public private(set) var snapshot: AggregateSnapshot
 
     public let store: AggregateStore
@@ -104,8 +105,8 @@ public final class AppModel: ObservableObject {
         self.deviceProfile = saved
         self.status = saved.confirmed ? .permissionDenied : .notOnboarded
         self.reduceMotion = UserDefaults.standard.bool(forKey: "Inputscape.ReduceMotion")
-        self.touchHeatmapEnabled = UserDefaults.standard.object(forKey: "Inputscape.TouchHeatmapEnabled")
-            as? Bool ?? true
+        self.heatmapDisplayMode = UserDefaults.standard.string(forKey: "Inputscape.HeatmapDisplayMode")
+            .flatMap(HeatmapDisplayMode.init(rawValue:)) ?? .continuous
         self.snapshot = .empty(.today)
         // 重启场景：回灌今天已落盘的记录，避免当日统计清零。
         engine.loadToday(from: store)
@@ -205,6 +206,7 @@ public final class AppModel: ObservableObject {
         startIdleSettleTimer()
         observeWorkspace()
         updateTouchMonitor()
+        startDataRefreshTimer()
     }
 
     private func startMonitor() {
@@ -251,10 +253,6 @@ public final class AppModel: ObservableObject {
                 // 设备不支持 Force Touch 时开关真正生效：不计数、不进实时流。
                 guard engine.isForceTouchEnabled() else { return }
                 track(.forceTouch)
-            },
-            onPressure: { pressure in
-                // 三档直方图 + 压力和（引擎内部按开关门控）。
-                engine.ingestPressure(pressure)
             },
             onSmartZoom: {
                 track(.smartZoom)
@@ -425,28 +423,68 @@ public final class AppModel: ObservableObject {
         UserDefaults.standard.set(value, forKey: "Inputscape.ReduceMotion")
     }
 
-    // MARK: - 触点热力图开关（实验性）
+    // MARK: - 触点热力图
 
-    public func setTouchHeatmapEnabled(_ enabled: Bool) {
-        touchHeatmapEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: "Inputscape.TouchHeatmapEnabled")
-        updateTouchMonitor()
+    /// 热力图显示模式（数据层统一 96×64，模式只影响渲染）。
+    public func setHeatmapDisplayMode(_ mode: HeatmapDisplayMode) {
+        heatmapDisplayMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "Inputscape.HeatmapDisplayMode")
     }
 
     /// 触点监听生命周期与观察状态联动：仅「已确认设备 + 权限齐备 +
-    /// 正在观察 + 功能开启」时运行；暂停 / 撤销权限 / 关闭开关即停止。
+    /// 正在观察」时运行；暂停 / 撤销权限即停止。
     private func updateTouchMonitor() {
         let shouldRun = deviceProfile.confirmed
             && permission.granted
             && status == .running
-            && touchHeatmapEnabled
         if shouldRun {
             let engine = self.engine
-            TouchpointMonitor.shared.start { normalizedX, normalizedY in
-                engine.ingestTouchpoint(normalizedX: normalizedX, normalizedY: normalizedY)
+            TouchpointMonitor.shared.start { sample in
+                // 热力网格 + 按压强度直方图（MT 线程直接聚合，无 UI 路径）。
+                engine.ingestTouchpoint(normalizedX: sample.x, normalizedY: sample.y)
+                engine.ingestTouchPressure(sample.pressure)
+                // 实时触控板（LiveModel 内部锁缓存，30Hz 合并发布）。
+                Task { @MainActor in
+                    LiveModel.shared.noteTouchSample(sample)
+                }
             }
+            LiveModel.shared.startTouchPulse()
         } else {
             TouchpointMonitor.shared.stop()
+            LiveModel.shared.stopTouchPulse()
+        }
+    }
+
+    // MARK: - 数据页自动刷新
+
+    private var dataRefreshTimer: Timer?
+    private var pageCancellable: AnyCancellable?
+
+    /// 数据页（总览/键盘/触控板）3 秒自动刷新 + 切页立即刷新。
+    /// refresh() 为毫秒级全量合并，常驻低频定时无感；
+    /// 实时页/设置页不刷（避免无谓全树重算）。
+    private func startDataRefreshTimer() {
+        guard dataRefreshTimer == nil else { return }
+        let timer = Timer(timeInterval: 3.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshIfShowingDataPage() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        dataRefreshTimer = timer
+        guard pageCancellable == nil else { return }
+        pageCancellable = $page.dropFirst().sink { [weak self] page in
+            guard let self, self.status == .running else { return }
+            switch page {
+            case .overview, .keyboard, .trackpad: self.refresh()
+            default: break
+            }
+        }
+    }
+
+    private func refreshIfShowingDataPage() {
+        guard status == .running else { return }
+        switch page {
+        case .overview, .keyboard, .trackpad: refresh()
+        default: break
         }
     }
 }

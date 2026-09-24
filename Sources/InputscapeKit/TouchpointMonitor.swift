@@ -53,10 +53,29 @@ struct MTTouchC {
     var zDensity: Float
 }
 
-/// 触点状态机（MTTouchState）：只消费 3（making，指尖落下）与 4（touching，接触中）。
+/// 触点状态机（MTTouchState）：3(making)/4(touching) = 接触中；
+/// 5(breaking)/6(lingering)/7(outOfRange) = 即将或已经离开；
+/// 1(startInRange)/2(hover) = 接近未触，忽略。
 enum MTTouchStateC {
     static let making: UInt32 = 3
     static let touching: UInt32 = 4
+    static let breaking: UInt32 = 5
+    static let lingering: UInt32 = 6
+    static let outOfRange: UInt32 = 7
+}
+
+/// 单个触点样本（多路消费：热力网格 / 压力直方图 / 实时触控板）。
+public struct TouchSample: Sendable {
+    public enum State: Sendable {
+        case contact      // 接触中（making / touching）
+        case departure    // 离开（breaking / lingering / outOfRange）
+    }
+
+    public let fingerID: Int32
+    public let x: Double          // 归一化 0–1，左→右
+    public let y: Double          // 归一化 0–1，上→下
+    public let pressure: Double   // 0–1 连续手指压力
+    public let state: State
 }
 
 /// MTRegisterContactFrameCallback 的回调签名。
@@ -92,18 +111,50 @@ func MTRegisterContactFrameCallback(_ device: MTDeviceRef, _ callback: MTFrameCa
 private let callbackRouteLock = NSLock()
 private nonisolated(unsafe) var activeTouchHandler: TouchpointMonitor.TouchHandler?
 
-/// C 回调入口：只做状态过滤 + 归一化坐标派发，MT 内部线程高频调用，
-/// 必须保持纳秒级开销（无分配、无字符串、无日志）。
+/// 诊断探针：INPUTSCAPE_DEBUG_TOUCH=1 时把触点样本（坐标/压力/状态）
+/// 追加到 /tmp/inputscape-events.log，用于核对 MTTouch 布局、坐标方向
+/// 与手指压力值域（压力阈值标定的数据来源）。只记录字段数值。
+private let debugTouchSamples =
+    ProcessInfo.processInfo.environment["INPUTSCAPE_DEBUG_TOUCH"] == "1"
+private nonisolated(unsafe) var debugSampleCount = 0
+private let debugSampleLock = NSLock()
+
+/// C 回调入口：只做状态映射 + 样本派发，MT 内部线程高频调用，
+/// 必须保持纳秒级开销（无分配、无字符串；探针仅在 env 门控下启用）。
 private let mtFrameCallback: MTFrameCallbackC = { _, touches, numTouches, _, _ in
     callbackRouteLock.lock()
     let handler = activeTouchHandler
     callbackRouteLock.unlock()
-    guard let handler = activeTouchHandler, numTouches > 0 else { return }
+    guard let handler, numTouches > 0 else { return }
     let stride = MemoryLayout<MTTouchC>.stride
     for index in 0..<numTouches {
         let touch = touches.load(fromByteOffset: index * stride, as: MTTouchC.self)
-        guard touch.state == MTTouchStateC.making || touch.state == MTTouchStateC.touching else { continue }
-        handler(Double(touch.normalizedVector.position.x), Double(touch.normalizedVector.position.y))
+        let state: TouchSample.State
+        switch touch.state {
+        case MTTouchStateC.making, MTTouchStateC.touching:
+            state = .contact
+        case MTTouchStateC.breaking, MTTouchStateC.lingering, MTTouchStateC.outOfRange:
+            state = .departure
+        default:
+            continue // 接近未触等状态不派发
+        }
+        let sample = TouchSample(
+            fingerID: touch.fingerID,
+            x: Double(touch.normalizedVector.position.x),
+            y: Double(touch.normalizedVector.position.y),
+            pressure: Double(touch.zTotal),
+            state: state
+        )
+        if debugTouchSamples {
+            debugSampleLock.lock()
+            debugSampleCount += 1
+            let count = debugSampleCount
+            debugSampleLock.unlock()
+            if count <= 200 {
+                EventMonitor.debugLogForProbe("touch id=\(sample.fingerID) x=\(sample.x) y=\(sample.y) pressure=\(sample.pressure) state=\(state == .contact ? "contact" : "departure")")
+            }
+        }
+        handler(sample)
     }
 }
 
@@ -113,7 +164,7 @@ private let mtFrameCallback: MTFrameCallbackC = { _, touches, numTouches, _, _ i
 /// 网格聚合在 AggregationEngine 完成。
 public final class TouchpointMonitor: @unchecked Sendable {
 
-    public typealias TouchHandler = @Sendable (_ normalizedX: Double, _ normalizedY: Double) -> Void
+    public typealias TouchHandler = @Sendable (_ sample: TouchSample) -> Void
 
     public static let shared = TouchpointMonitor()
 

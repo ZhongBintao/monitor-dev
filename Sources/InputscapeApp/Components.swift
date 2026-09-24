@@ -253,3 +253,32 @@ func formatCount(_ n: Int) -> String {
     formatter.numberStyle = .decimal
     return formatter.string(from: NSNumber(value: n)) ?? "\(n)"
 }
+
+// MARK: - 数据页刷新按钮
+
+/// 总览 / 键盘分布 / 触控板操作三页共用：点击立即重算快照刷新 UI，
+/// 无需等待 3 秒自动刷新。
+struct RefreshButton: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Button {
+            model.refresh()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("刷新")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundColor(Theme.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Theme.background))
+            .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("立即刷新当前页数据")
+        .accessibilityLabel("刷新当前页数据")
+    }
+}

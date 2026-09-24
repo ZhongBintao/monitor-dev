@@ -23,13 +23,17 @@ struct OverviewView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(periodTitle)
-                .font(.system(size: 28, weight: .bold))
-                .foregroundColor(Theme.navy)
-            Text("轻量观察，了解自己的使用习惯。")
-                .font(.system(size: 14))
-                .foregroundColor(Theme.secondary)
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(periodTitle)
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundColor(Theme.navy)
+                Text("轻量观察，了解自己的使用习惯。")
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.secondary)
+            }
+            Spacer()
+            RefreshButton()
         }
     }
 
@@ -291,11 +295,15 @@ struct KeyboardDistributionView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("每一个键，都有自己的频率")
-                .font(.system(size: 28, weight: .bold)).foregroundColor(Theme.navy)
-            Text("看清你最常用的物理键位。")
-                .font(.system(size: 14)).foregroundColor(Theme.secondary)
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("每一个键，都有自己的频率")
+                    .font(.system(size: 28, weight: .bold)).foregroundColor(Theme.navy)
+                Text("看清你最常用的物理键位。")
+                    .font(.system(size: 14)).foregroundColor(Theme.secondary)
+            }
+            Spacer()
+            RefreshButton()
         }
     }
 

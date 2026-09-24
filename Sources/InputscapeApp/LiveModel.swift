@@ -17,6 +17,10 @@ public final class LiveModel: ObservableObject {
     @Published public private(set) var pressedKeys: Set<String> = []
     /// 每个按下键的时间戳，用于兜底清理丢失 keyUp 的残留。
     private var pressedAt: [String: Date] = [:]
+    /// 实时触控板：当前接触中的手指（MT 线程写入缓存，30Hz 合并发布）。
+    private var liveTouchMap: [Int32: LiveState.TouchDot] = [:]
+    @Published public private(set) var touchDots: [LiveState.TouchDot] = []
+    private var touchPulseTimer: Timer?
 
     private init() {}
 
@@ -39,6 +43,8 @@ public final class LiveModel: ObservableObject {
     public func clearPressed() {
         pressedKeys.removeAll()
         pressedAt.removeAll()
+        liveTouchMap.removeAll()
+        touchDots = []
     }
 
     /// 兜底清理：单个键位按住超过 120 秒视为 keyUp 丢失（系统层偶发），
@@ -63,6 +69,45 @@ public final class LiveModel: ObservableObject {
             state.recentTrackpad.removeLast(state.recentTrackpad.count - LiveState.maxRecent)
         }
         lastIngestAt = Date()
+    }
+
+    // MARK: - 实时触控板（当前触点，仅内存）
+
+    /// 触点样本接收（MT 回调线程 → MainActor 转发，~125Hz）。
+    /// 只更新内部缓存，不直接触发发布——发布由 30Hz 脉冲统一完成，
+    /// 避免实时页以触控板回报率重绘。
+    public func noteTouchSample(_ sample: TouchSample) {
+        switch sample.state {
+        case .contact:
+            liveTouchMap[sample.fingerID] = LiveState.TouchDot(
+                fingerID: sample.fingerID,
+                x: sample.x, y: sample.y, pressure: sample.pressure)
+        case .departure:
+            liveTouchMap.removeValue(forKey: sample.fingerID)
+        }
+        lastIngestAt = Date()
+    }
+
+    /// 启动 30Hz 发布脉冲（观察开始 / 触点监听运行时）。
+    public func startTouchPulse() {
+        guard touchPulseTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.publishTouchDots() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        touchPulseTimer = timer
+    }
+
+    /// 停止脉冲并清空触点（暂停 / 权限撤销 / 退出观察）。
+    public func stopTouchPulse() {
+        touchPulseTimer?.invalidate()
+        touchPulseTimer = nil
+        liveTouchMap.removeAll()
+        touchDots = []
+    }
+
+    private func publishTouchDots() {
+        touchDots = liveTouchMap.values.sorted { $0.fingerID < $1.fingerID }
     }
 
     // MARK: - 空闲

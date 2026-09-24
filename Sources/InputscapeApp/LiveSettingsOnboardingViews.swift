@@ -54,9 +54,39 @@ struct LiveView: View {
     private var sidePanel: some View {
         VStack(alignment: .leading, spacing: 16) {
             heldKeysCard
+            liveTouchpadCard
             currentGestureCard
             statusCard
         }
+    }
+
+    /// 实时触控板：当前接触中的手指位置与按压强度即时反馈
+    /// （圆点越大、颜色越深 = 按压越重；30Hz 合并刷新）。
+    private var liveTouchpadCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("实时触控板").font(.system(size: 14, weight: .bold)).foregroundColor(Theme.navy)
+                    HelpMarker(text: "手指接触触控板时，接触位置以圆点实时显示：圆点越大、颜色越深表示按压越重（0–1 连续压力）。当前触点状态仅保存在内存中，退出即丢弃。")
+                    Spacer()
+                }
+                TouchpadLivePanel(dots: live.touchDots)
+                HStack {
+                    Text("当前触点").font(.system(size: 13)).foregroundColor(Theme.secondary)
+                    Spacer()
+                    Text("\(live.touchDots.count) 指 · 最大按压 \(maxLivePressureText)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Theme.navy)
+                        .monospacedDigit()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var maxLivePressureText: String {
+        guard let maxPressure = live.touchDots.map(\.pressure).max() else { return "—" }
+        return String(format: "%.2f", maxPressure)
     }
 
     /// 「当前按下的键」：按住的修饰键 / 普通键即时显示为徽章，松开即消失。
@@ -166,6 +196,44 @@ struct LiveView: View {
     }
 }
 
+// MARK: - 实时触控板面板
+
+/// 当前触点圆点（大小与透明度随手指压力 0–1 变化），仅内存数据渲染。
+struct TouchpadLivePanel: View {
+    let dots: [LiveState.TouchDot]
+
+    var body: some View {
+        GeometryReader { proxy in
+            let size = proxy.size
+            let cornerRadius = size.height * 0.085
+            ZStack {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Theme.background)
+                ForEach(dots) { dot in
+                    let diameter = size.height * (0.07 + 0.06 * CGFloat(min(1, max(0, dot.pressure))))
+                    Circle()
+                        .fill(Theme.coral.opacity(0.35 + 0.55 * min(1, max(0, dot.pressure))))
+                        .frame(width: diameter, height: diameter)
+                        .position(x: dot.x * size.width, y: dot.y * size.height)
+                }
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Theme.hairline, lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        }
+        .aspectRatio(1.6, contentMode: .fit)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    private var accessibilitySummary: String {
+        guard let maxPressure = dots.map(\.pressure).max() else {
+            return "实时触控板，当前无触点。"
+        }
+        return "实时触控板，当前 \(dots.count) 个触点，最大按压 \(String(format: "%.2f", maxPressure))。"
+    }
+}
+
 // MARK: - 设置
 
 struct SettingsView: View {
@@ -255,12 +323,26 @@ struct SettingsView: View {
                     get: { model.deviceProfile.supportsForceTouch },
                     set: { model.setForceTouchSupport($0) }
                 ))
-                Toggle("实验性：触点热力图", isOn: Binding(
-                    get: { model.touchHeatmapEnabled },
-                    set: { model.setTouchHeatmapEnabled($0) }
-                ))
-                Text("触点热力图读取系统触控板多点触控数据，把触点位置按 24×16 网格按日聚合计数（不保存轨迹、原始触点流或屏幕坐标）；设备不支持时无数据。首版基准为 MacBook Pro 14/16 英寸 US ANSI 键盘；ISO、JIS 与 Magic Keyboard 模板将在后续版本提供。")
-                    .font(.system(size: 11)).foregroundColor(Theme.tertiary)
+
+                // 触点热力图显示模式（数据层统一 96×64，模式只影响渲染）。
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("触点热力图显示模式")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.secondary)
+                    Picker("热力图显示模式", selection: Binding(
+                        get: { model.heatmapDisplayMode },
+                        set: { model.setHeatmapDisplayMode($0) }
+                    )) {
+                        ForEach(HeatmapDisplayMode.allCases, id: \.self) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 400)
+                    Text("触点热力图读取系统触控板多点触控数据，把触点位置按 96×64 网格按日聚合计数（不保存轨迹、原始触点流或屏幕坐标）；「网格 24×16」为降采样方块视图，「连续 96×64」为高斯扩散的无级热力面，两种模式渲染同一份数据。设备不支持时无数据。首版基准为 MacBook Pro 14/16 英寸 US ANSI 键盘；ISO、JIS 与 Magic Keyboard 模板将在后续版本提供。")
+                        .font(.system(size: 11)).foregroundColor(Theme.tertiary)
+                }
             }
         }
     }
@@ -319,8 +401,8 @@ struct SettingsView: View {
                 Text("数据与隐私").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
                 VStack(alignment: .leading, spacing: 6) {
                     bullet("仅保存本地聚合统计：每日按键数、触控操作数、活跃输入时长、5 分钟桶与键位计数。")
-                    bullet("点击压力仅按轻/中/深三档计数并保留平均压力，不保存压力原始值或轨迹。")
-                    bullet("触点热力图仅保存 24×16 网格触碰计数，不保存轨迹、原始触点流或屏幕坐标。")
+                    bullet("按压强度仅按手指连续压力的 20 桶直方图聚合（按帧计数），不保存原始压力序列。")
+                    bullet("触点热力图仅保存 96×64 网格触碰计数，不保存轨迹、原始触点流或屏幕坐标。")
                     bullet("不记录文字内容、按键序列、应用名称、屏幕坐标或原始事件。")
                     bullet("不提供云同步、导出或账号体系；历史数据持续保留在本机。")
                     bullet("实时观察状态仅保存在内存中，退出即丢弃。")
