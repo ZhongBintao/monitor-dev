@@ -7,7 +7,6 @@ import InputscapeKit
 struct TrackpadOpsView: View {
     @EnvironmentObject var model: AppModel
     @State private var selectedHeatmapCell: TouchHeatmapPanel.Cell?
-    @State private var selectedContinuousCell: TouchHeatmapContinuousPanel.Cell?
 
     var body: some View {
         ScrollView {
@@ -18,9 +17,9 @@ struct TrackpadOpsView: View {
                     hourlyCard
                 }
                 HStack(alignment: .top, spacing: 16) {
-                    if model.deviceProfile.supportsForceTouch {
-                        pressureCard
-                    }
+                    // 两卡成对布局：设备不支持 Force Touch 时压力卡显示
+                    // 说明态而非消失，避免排行卡独撑整行造成布局跳动。
+                    pressureCard
                     rankingCard
                 }
                 heatmapCard
@@ -155,7 +154,9 @@ struct TrackpadOpsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Top 操作排行").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
                 if ranking.isEmpty {
-                    Text("暂无数据。").font(.system(size: 13)).foregroundColor(Theme.secondary)
+                    EmptyStateView(title: "暂无触控操作",
+                                   detail: "开始观察后，这里会列出使用最多的触控板操作。")
+                        .frame(height: 160)
                 } else {
                     ForEach(Array(ranking.enumerated()), id: \.offset) { index, entry in
                         HStack {
@@ -178,33 +179,34 @@ struct TrackpadOpsView: View {
         }
     }
 
-    /// 按压强度分布卡：MTTouch 手指连续压力（0–1，接触中按帧聚合）的
-    /// 20 桶直方图 + 轻/中/深三档汇总 + 平均压力。
-    /// 数据源为触控板硬件连续压力，真随按压力度变化（旧方案
-    /// kCGMouseEventPressure 为点击瞬间标量，无区分度，已废弃）。
-    /// 设备不支持 Force Touch 时整卡隐藏（非 FT 触控板压力值域未知）。
+    /// 按压强度分布卡：MTTouch 手指连续压力（按帧聚合）的 40 桶直方图
+    /// （量程 0–2）+ 轻/重两档汇总 + 平均压力。
+    /// 分界经真机标定：< 1.0 轻按，≥ 1.0 重按；设备不支持 Force Touch
+    /// 时显示说明态（非 FT 触控板压力值域未知）。
     private var pressureCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 6) {
-                    Text("按压强度分布").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
-                    HelpMarker(text: "基于触控板硬件的手指连续压力（0–1，接触中按帧聚合）：按压越重、越久，右侧桶计数越高。轻/中/深分界 0.25 / 0.55，随探针数据持续校准。只保存直方图计数，不保存原始压力序列。")
-                    Spacer()
-                    Text("平均按压 \(averagePressureText)")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Theme.secondary)
-                        .monospacedDigit()
-                }
-                if snapshot.touchPressureSamples == 0 {
+                CardHeader(title: "按压强度分布",
+                           help: "基于触控板硬件的手指连续压力（接触中按帧聚合）：按压越重、越久，右侧桶计数越高。分界经真机标定：< 1.0 轻按，≥ 1.0 重按（电容总量实测可超 1）。只保存直方图计数，不保存原始压力序列。",
+                           trailing: AnyView(
+                            Text("平均按压 \(averagePressureText)")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Theme.secondary)
+                                .monospacedDigit()))
+                if !model.deviceProfile.supportsForceTouch {
+                    Text("当前设备不支持 Force Touch，未采集按压数据。")
+                        .font(.system(size: 13)).foregroundColor(Theme.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
+                } else if snapshot.touchPressureSamples == 0 {
                     EmptyStateView(title: "暂无按压数据",
                                    detail: "观察进行中时会按手指接触的每一帧累计压力分布。")
-                        .frame(height: 120)
+                        .frame(height: 160)
                 } else {
                     let tiers = snapshot.touchPressureTiers
                     let total = snapshot.touchPressureSamples
                     tierRow(tier: .light, count: tiers.light, total: total)
-                    tierRow(tier: .medium, count: tiers.medium, total: total)
-                    tierRow(tier: .deep, count: tiers.deep, total: total)
+                    tierRow(tier: .heavy, count: tiers.heavy, total: total)
                     pressureHistogram
                 }
             }
@@ -237,7 +239,7 @@ struct TrackpadOpsView: View {
         .accessibilityLabel("\(tier.label) \(count) 帧，占比 \(Int((fraction * 100).rounded()))%")
     }
 
-    /// 20 桶压力直方图（0–1，0.05 步进）。
+    /// 40 桶压力直方图（量程 0–2，0.05 步进）。
     private var pressureHistogram: some View {
         let points = snapshot.touchPressureHistogram.enumerated().map { index, count in
             HistogramPoint(center: PressureTier.bucketCenter(index), count: count)
@@ -249,10 +251,10 @@ struct TrackpadOpsView: View {
                 .foregroundStyle(Theme.coral.opacity(0.85))
         }
         .chartXAxis {
-            AxisMarks(values: [0, 0.25, 0.5, 0.75, 1.0]) { value in
+            AxisMarks(values: [0, 0.5, 1.0, 1.5, 2.0]) { value in
                 AxisValueLabel() {
                     if let value = value.as(Double.self) {
-                        Text(String(format: "%.2f", value))
+                        Text(String(format: "%.1f", value))
                             .font(.system(size: 9))
                     }
                 }
@@ -283,91 +285,77 @@ struct TrackpadOpsView: View {
     private func pressureColor(_ tier: PressureTier) -> Color {
         switch tier {
         case .light: return Theme.coral.opacity(0.45)
-        case .medium: return Theme.coral.opacity(0.7)
-        case .deep: return Theme.coral
+        case .heavy: return Theme.coral
         }
     }
 
     // MARK: - 触点热力图
 
-    /// 触点热力图卡：触点位置按 96×64 网格按日聚合，两种显示模式
-    /// （设置页切换）渲染同一份数据——「网格 24×16」为 4×4 降采样方块，
-    /// 「连续 96×64」为高分辨率 + 高斯扩散的无级热力面。
+    /// 触点热力图卡（UI 定稿）：触点位置按 24×16 网格按日聚合计数，
+    /// 面板 + 数字色阶图例 + 选中/最热读数统一居中排版。
     /// 颜色只做方向引导：点按格子查看具体次数，附最热区域文字说明。
     private var heatmapCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 6) {
-                    Text("触点热力图").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
-                    HelpMarker(text: "读取系统触控板多点触控数据，把触点位置按 96×64 网格按日聚合计数。只保存网格计数，不保存轨迹、原始触点流或屏幕坐标；设备不支持时无数据。可在设置中切换「网格 24×16」与「连续 96×64」显示模式。颜色越深表示触碰越频繁，点按格子可查看具体次数。")
-                    Spacer()
-                    Text(model.heatmapDisplayMode.label)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Theme.tertiary)
-                    Text("触碰 \(formatCount(snapshot.touchTotal)) 次")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Theme.secondary)
-                }
+                CardHeader(title: "触点热力图",
+                           help: "读取系统触控板多点触控数据，把触点位置按 24×16 网格按日聚合计数。只保存网格计数，不保存轨迹、原始触点流或屏幕坐标；设备不支持时无数据。色阶按当前数据实际次数线性分 7 档，图例标注各档数字区间；点按格子可查看具体次数。",
+                           trailing: AnyView(
+                            Text("触碰 \(formatCount(snapshot.touchTotal)) 次")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Theme.secondary)))
                 if snapshot.touchTotal == 0 {
                     EmptyStateView(title: "暂无触点数据",
                                    detail: "在触控板上操作后会自动累计触点位置分布；设备不支持时无数据。")
-                        .frame(height: 140)
+                        .frame(height: 160)
                 } else {
-                    switch model.heatmapDisplayMode {
-                    case .grid:
-                        TouchHeatmapPanel(grid: DailyRecord.downsampleTouchGridToLegacy(snapshot.touchGrid),
+                    let bounds = HeatLegend.boundaries(maxCount: snapshot.touchGrid.max() ?? 0,
+                                                       steps: Theme.coralScale.count)
+                    VStack(spacing: 10) {
+                        TouchHeatmapPanel(grid: snapshot.touchGrid,
+                                          boundaries: bounds,
                                           selectedCell: $selectedHeatmapCell)
                             .frame(maxWidth: 460)
-                            .frame(maxWidth: .infinity)
-                        heatmapFootnote(legend: "网格 24×16",
-                                        cell: selectedHeatmapCell.map { TouchHeatmapContinuousPanel.Cell(row: $0.row, column: $0.column) },
-                                        columns: DailyRecord.legacyTouchGridColumns,
-                                        rows: DailyRecord.legacyTouchGridRows)
-                    case .continuous:
-                        TouchHeatmapContinuousPanel(grid: snapshot.touchGrid,
-                                                    selectedCell: $selectedContinuousCell)
-                            .frame(maxWidth: 460)
-                            .frame(maxWidth: .infinity)
-                        heatmapFootnote(legend: "连续 96×64",
-                                        cell: selectedContinuousCell,
-                                        columns: DailyRecord.touchGridColumns,
-                                        rows: DailyRecord.touchGridRows)
+                        HeatLegendView(scale: Theme.coralScale, boundaries: bounds)
+                        TouchHeatmapFootnote(snapshot: snapshot, selectedCell: selectedHeatmapCell)
+                            .multilineTextAlignment(.center)
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
-        .onChange(of: model.heatmapDisplayMode) { _ in
-            selectedHeatmapCell = nil
-            selectedContinuousCell = nil
-        }
     }
+}
 
-    /// 读数说明（不只依赖颜色）：优先显示选中格，否则显示最热区域。
-    @ViewBuilder
-    private func heatmapFootnote(legend: String,
-                                 cell: TouchHeatmapContinuousPanel.Cell?,
-                                 columns: Int, rows: Int) -> some View {
-        if let cell {
+// MARK: - 热力图读数脚注（不只依赖颜色，总览/触控板页共用）
+
+/// 优先显示选中格读数；未选中时显示最热区域描述。
+struct TouchHeatmapFootnote: View {
+    let snapshot: AggregateSnapshot
+    let selectedCell: TouchHeatmapPanel.Cell?
+
+    var body: some View {
+        if let cell = selectedCell {
             let count = snapshot.touchCount(row: cell.row, column: cell.column)
-            Text("\(legend) · 选中格：第 \(cell.row + 1) 行 · 第 \(cell.column + 1) 列，\(formatCount(count)) 次触碰。")
+            Text("选中格：第 \(cell.row + 1) 行 · 第 \(cell.column + 1) 列，\(formatCount(count)) 次触碰。再次点按取消。")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.navy)
         } else if let peak = snapshot.touchPeak {
-            Text("\(legend) · 最热区域在第 \(peak.row + 1) 行 · 第 \(peak.column + 1) 列（网格 \(columns)×\(rows)），共 \(formatCount(peak.count)) 次触碰；点按格子查看具体次数。")
+            Text("最热区域在第 \(peak.row + 1) 行 · 第 \(peak.column + 1) 列，共 \(formatCount(peak.count)) 次触碰；点按格子查看具体次数。")
                 .font(.system(size: 12))
                 .foregroundColor(Theme.secondary)
         } else {
-            Text("\(legend) · 网格 \(columns)×\(rows)，点按格子查看具体次数。")
+            Text("网格 \(DailyRecord.touchGridColumns)×\(DailyRecord.touchGridRows)。")
                 .font(.system(size: 12))
                 .foregroundColor(Theme.secondary)
         }
     }
 }
 
-// MARK: - 触点热力图面板（网格 24×16 显示模式）
+// MARK: - 触点热力图面板（24×16）
 
-/// 圆角触控板面板 + 24×16 珊瑚红色阶网格（Canvas 绘制，单次布局无逐格视图）。
-/// 数据为 96×64 网格 4×4 降采样结果。
+/// 圆角触控板面板 + 24×16 珊瑚红分档热力网格（Canvas 绘制，单次布局无逐格视图）。
+/// 着色走 HeatLegend.bucketIndex 分档，与数字色阶图例一一对应；
+/// 零计数格保留极淡珊瑚底。点按格子切换选中描边。
 struct TouchHeatmapPanel: View {
     struct Cell: Equatable {
         let row: Int
@@ -375,6 +363,8 @@ struct TouchHeatmapPanel: View {
     }
 
     let grid: [Int]
+    /// 与图例共用的分档边界（HeatLegend.boundaries 的结果）。
+    let boundaries: [Int]
     @Binding var selectedCell: Cell?
 
     /// 面板纵横比（实物触控板 ~16:10）。
@@ -389,16 +379,15 @@ struct TouchHeatmapPanel: View {
             context.stroke(panel, with: .color(Theme.hairline), lineWidth: 1)
 
             let metrics = gridMetrics(size: size)
-            let maxCount = grid.max() ?? 0
-            for row in 0..<DailyRecord.legacyTouchGridRows {
-                for column in 0..<DailyRecord.legacyTouchGridColumns {
+            for row in 0..<DailyRecord.touchGridRows {
+                for column in 0..<DailyRecord.touchGridColumns {
                     let index = row * DailyRecord.touchGridColumns + column
                     let count = index < grid.count ? grid[index] : 0
                     let rect = cellRect(metrics: metrics, row: row, column: column)
                     let cellPath = Path(roundedRect: rect, cornerRadius: metrics.cellSize * 0.28)
-                    if count > 0, maxCount > 0 {
-                        let intensity = 0.18 + 0.82 * Double(count) / Double(maxCount)
-                        context.fill(cellPath, with: .color(Theme.coral.opacity(intensity)))
+                    if count > 0 {
+                        let bucket = HeatLegend.bucketIndex(count: count, boundaries: boundaries)
+                        context.fill(cellPath, with: .color(Theme.coralScale[bucket]))
                     } else {
                         context.fill(cellPath, with: .color(Theme.coral.opacity(0.07)))
                     }
@@ -438,8 +427,8 @@ struct TouchHeatmapPanel: View {
         return GridMetrics(
             originX: padX,
             originY: padY,
-            cellWidth: (size.width - padX * 2) / CGFloat(DailyRecord.legacyTouchGridColumns),
-            cellHeight: (size.height - padY * 2) / CGFloat(DailyRecord.legacyTouchGridRows)
+            cellWidth: (size.width - padX * 2) / CGFloat(DailyRecord.touchGridColumns),
+            cellHeight: (size.height - padY * 2) / CGFloat(DailyRecord.touchGridRows)
         )
     }
 
@@ -450,135 +439,6 @@ struct TouchHeatmapPanel: View {
         return CGRect(x: x + gap / 2, y: y + gap / 2,
                       width: metrics.cellWidth - gap,
                       height: metrics.cellHeight - gap)
-    }
-
-    private func handleTap(at location: CGPoint, size: CGSize) {
-        let metrics = gridMetrics(size: size)
-        let column = Int((location.x - metrics.originX) / metrics.cellWidth)
-        let row = Int((location.y - metrics.originY) / metrics.cellHeight)
-        guard row >= 0, row < DailyRecord.legacyTouchGridRows,
-              column >= 0, column < DailyRecord.legacyTouchGridColumns else {
-            selectedCell = nil
-            return
-        }
-        let cell = Cell(row: row, column: column)
-        selectedCell = selectedCell == cell ? nil : cell
-    }
-
-    private var accessibilitySummary: String {
-        let total = grid.reduce(0, +)
-        if let peak = touchPeak(grid: grid) {
-            return "触点热力图，共 \(total) 次触碰；最热区域第 \(peak.row + 1) 行第 \(peak.column + 1) 列，\(peak.count) 次。"
-        }
-        return "触点热力图，暂无触碰记录。"
-    }
-
-    private func touchPeak(grid: [Int]) -> (count: Int, row: Int, column: Int)? {
-        var best: (count: Int, row: Int, column: Int)?
-        for row in 0..<DailyRecord.legacyTouchGridRows {
-            for column in 0..<DailyRecord.legacyTouchGridColumns {
-                let index = row * DailyRecord.legacyTouchGridColumns + column
-                let count = index < grid.count ? grid[index] : 0
-                if count > 0, count > (best?.count ?? 0) {
-                    best = (count, row, column)
-                }
-            }
-        }
-        return best
-    }
-}
-
-// MARK: - 触点热力图面板（连续 96×64 显示模式）
-
-/// 高分辨率热力面：96×64 格点按热度着色后整体高斯扩散，
-/// 视觉为一整块无级连续区域；面板边框与选中格描边走独立不模糊层。
-struct TouchHeatmapContinuousPanel: View {
-    struct Cell: Equatable {
-        let row: Int
-        let column: Int
-    }
-
-    let grid: [Int]
-    @Binding var selectedCell: Cell?
-
-    /// 面板纵横比（实物触控板 ~16:10）。
-    private static let panelAspectRatio: CGFloat = 1.6
-
-    var body: some View {
-        GeometryReader { proxy in
-            let size = proxy.size
-            let cornerRadius = size.height * 0.085
-            ZStack {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Theme.background)
-                Canvas { context, _ in
-                    let metrics = gridMetrics(size: size)
-                    let maxCount = grid.max() ?? 0
-                    guard maxCount > 0 else { return }
-                    for row in 0..<DailyRecord.touchGridRows {
-                        for column in 0..<DailyRecord.touchGridColumns {
-                            let index = row * DailyRecord.touchGridColumns + column
-                            let count = index < grid.count ? grid[index] : 0
-                            guard count > 0 else { continue }
-                            let rect = cellRect(metrics: metrics, row: row, column: column)
-                            let intensity = 0.22 + 0.78 * Double(count) / Double(maxCount)
-                            let path = Path(roundedRect: rect, cornerRadius: rect.width * 0.3)
-                            context.fill(path, with: .color(Theme.coral.opacity(intensity)))
-                        }
-                    }
-                }
-                .blur(radius: max(2, size.height * 0.014))
-                Canvas { context, _ in
-                    let metrics = gridMetrics(size: size)
-                    if let selected = selectedCell {
-                        let rect = cellRect(metrics: metrics, row: selected.row, column: selected.column)
-                        let path = Path(roundedRect: rect, cornerRadius: rect.width * 0.3)
-                        context.stroke(path, with: .color(Theme.navy), lineWidth: 1.6)
-                    }
-                }
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Theme.hairline, lineWidth: 1)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        }
-        .aspectRatio(Self.panelAspectRatio, contentMode: .fit)
-        .contentShape(Rectangle())
-        .overlay(GeometryReader { proxy in
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { location in
-                    handleTap(at: location, size: proxy.size)
-                }
-        })
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilitySummary)
-    }
-
-    // MARK: 布局度量（96×64）
-
-    private struct GridMetrics {
-        let originX: CGFloat
-        let originY: CGFloat
-        let cellWidth: CGFloat
-        let cellHeight: CGFloat
-        var cellSize: CGFloat { min(cellWidth, cellHeight) }
-    }
-
-    private func gridMetrics(size: CGSize) -> GridMetrics {
-        let padX = size.width * 0.05
-        let padY = size.height * 0.07
-        return GridMetrics(
-            originX: padX,
-            originY: padY,
-            cellWidth: (size.width - padX * 2) / CGFloat(DailyRecord.touchGridColumns),
-            cellHeight: (size.height - padY * 2) / CGFloat(DailyRecord.touchGridRows)
-        )
-    }
-
-    private func cellRect(metrics: GridMetrics, row: Int, column: Int) -> CGRect {
-        let x = metrics.originX + CGFloat(column) * metrics.cellWidth
-        let y = metrics.originY + CGFloat(row) * metrics.cellHeight
-        return CGRect(x: x, y: y, width: metrics.cellWidth, height: metrics.cellHeight)
     }
 
     private func handleTap(at location: CGPoint, size: CGSize) {
@@ -596,13 +456,13 @@ struct TouchHeatmapContinuousPanel: View {
 
     private var accessibilitySummary: String {
         let total = grid.reduce(0, +)
-        if let peak = snapshotTouchPeak() {
+        if let peak = touchPeak(grid: grid) {
             return "触点热力图，共 \(total) 次触碰；最热区域第 \(peak.row + 1) 行第 \(peak.column + 1) 列，\(peak.count) 次。"
         }
         return "触点热力图，暂无触碰记录。"
     }
 
-    private func snapshotTouchPeak() -> (count: Int, row: Int, column: Int)? {
+    private func touchPeak(grid: [Int]) -> (count: Int, row: Int, column: Int)? {
         var best: (count: Int, row: Int, column: Int)?
         for row in 0..<DailyRecord.touchGridRows {
             for column in 0..<DailyRecord.touchGridColumns {

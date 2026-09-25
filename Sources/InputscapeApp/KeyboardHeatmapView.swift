@@ -64,10 +64,12 @@ struct KeyboardHeatmapView: View {
     private func canvas(unit: CGFloat) -> some View {
         let gap = unit * 0.10
         let maxCount = max(values.values.max() ?? 0, 1)
+        // 分档边界与数字图例共用同一函数，颜色与图例数字一一对应。
+        let bounds = HeatLegend.boundaries(maxCount: maxCount, steps: Theme.heatScale.count)
 
         return ZStack(alignment: .topLeading) {
             ForEach(KeyboardLayoutSpec.keys) { key in
-                keycap(for: key, unit: unit, gap: gap, maxCount: maxCount)
+                keycap(for: key, unit: unit, gap: gap, maxCount: maxCount, bounds: bounds)
                     .frame(width: CGFloat(key.width) * unit - gap,
                            height: CGFloat(key.height) * unit - gap,
                            alignment: .topLeading)
@@ -78,7 +80,8 @@ struct KeyboardHeatmapView: View {
     }
 
     @ViewBuilder
-    private func keycap(for key: KeyDefinition, unit: CGFloat, gap: CGFloat, maxCount: Int) -> some View {
+    private func keycap(for key: KeyDefinition, unit: CGFloat, gap: CGFloat,
+                        maxCount: Int, bounds: [Int]) -> some View {
         let count = values[key.id] ?? 0
         let intensity = count > 0 ? Double(count) / Double(maxCount) : 0
         let isHighlighted = highlightKeyID == key.id
@@ -89,7 +92,9 @@ struct KeyboardHeatmapView: View {
         let fill: Color = {
             if isPressed { return Theme.keyPurple }
             if isHighlighted { return Theme.keyPurple.opacity(0.75) }
-            if heatOn && count > 0 { return Theme.heatColor(intensity) }
+            if heatOn && count > 0 {
+                return Theme.heatScale[HeatLegend.bucketIndex(count: count, boundaries: bounds)]
+            }
             return Theme.keycap
         }()
         let contentColor: Color = (isPressed || isHighlighted)

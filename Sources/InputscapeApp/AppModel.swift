@@ -58,8 +58,6 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var permission: PermissionStatus = .unknown
     @Published public private(set) var deviceProfile: DeviceProfile
     @Published public private(set) var reduceMotion = false
-    /// 触点热力图显示模式（设置页选择，UserDefaults 持久化；数据层统一 96×64）。
-    @Published public private(set) var heatmapDisplayMode: HeatmapDisplayMode
     @Published public private(set) var snapshot: AggregateSnapshot
 
     public let store: AggregateStore
@@ -105,8 +103,6 @@ public final class AppModel: ObservableObject {
         self.deviceProfile = saved
         self.status = saved.confirmed ? .permissionDenied : .notOnboarded
         self.reduceMotion = UserDefaults.standard.bool(forKey: "Inputscape.ReduceMotion")
-        self.heatmapDisplayMode = UserDefaults.standard.string(forKey: "Inputscape.HeatmapDisplayMode")
-            .flatMap(HeatmapDisplayMode.init(rawValue:)) ?? .continuous
         self.snapshot = .empty(.today)
         // 重启场景：回灌今天已落盘的记录，避免当日统计清零。
         engine.loadToday(from: store)
@@ -424,12 +420,6 @@ public final class AppModel: ObservableObject {
     }
 
     // MARK: - 触点热力图
-
-    /// 热力图显示模式（数据层统一 96×64，模式只影响渲染）。
-    public func setHeatmapDisplayMode(_ mode: HeatmapDisplayMode) {
-        heatmapDisplayMode = mode
-        UserDefaults.standard.set(mode.rawValue, forKey: "Inputscape.HeatmapDisplayMode")
-    }
 
     /// 触点监听生命周期与观察状态联动：仅「已确认设备 + 权限齐备 +
     /// 正在观察」时运行；暂停 / 撤销权限即停止。

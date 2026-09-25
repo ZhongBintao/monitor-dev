@@ -28,37 +28,56 @@ final class TrackpadEnhancementTests: XCTestCase {
 
     // MARK: - 手指压力分档与直方图
 
+    /// 两档分界：< 1.0 轻按，≥ 1.0 重按（zTotal 电容总量实测可超 1）。
     func testPressureTierClassificationBoundaries() {
         XCTAssertEqual(PressureTier.classify(0.0), .light)
-        XCTAssertEqual(PressureTier.classify(0.24), .light)
-        XCTAssertEqual(PressureTier.classify(0.25), .medium, "0.25 进入中按档（下界含）")
-        XCTAssertEqual(PressureTier.classify(0.54), .medium)
-        XCTAssertEqual(PressureTier.classify(0.55), .deep, "0.55 进入深按档（下界含）")
-        XCTAssertEqual(PressureTier.classify(1.0), .deep)
+        XCTAssertEqual(PressureTier.classify(0.55), .light, "旧中按区间并入轻按")
+        XCTAssertEqual(PressureTier.classify(0.99), .light)
+        XCTAssertEqual(PressureTier.classify(1.0), .heavy, "1.0 进入重按档（下界含）")
+        XCTAssertEqual(PressureTier.classify(1.7), .heavy)
+        XCTAssertEqual(PressureTier.classify(2.0), .heavy)
         XCTAssertEqual(PressureTier.classify(-0.2), .light, "异常负值按轻按兜底")
     }
 
-    /// 压力 → 直方图桶：0.05 步进，越界钳制；0.25/0.55 恰好对齐桶边界。
+    /// 压力 → 直方图桶：40 桶 × 0.05（量程 0–2），越界钳制；
+    /// 1.0 恰落桶 20（重按首桶）。0.05 非二进制精确值，索引用 rounded 防浮点错桶。
     func testPressureBucketIndexing() {
         XCTAssertEqual(PressureTier.bucketIndex(0.0), 0)
         XCTAssertEqual(PressureTier.bucketIndex(0.1), 2)
         XCTAssertEqual(PressureTier.bucketIndex(0.25), 5)
         XCTAssertEqual(PressureTier.bucketIndex(0.55), 11)
-        XCTAssertEqual(PressureTier.bucketIndex(1.0), 19)
+        XCTAssertEqual(PressureTier.bucketIndex(1.0), 20, "1.0 = 重按首桶")
+        XCTAssertEqual(PressureTier.bucketIndex(1.55), 31)
+        XCTAssertEqual(PressureTier.bucketIndex(2.0), 39, "量程上界钳制末桶")
         XCTAssertEqual(PressureTier.bucketIndex(-0.3), 0, "负值钳到首桶")
-        XCTAssertEqual(PressureTier.bucketIndex(1.7), 19, "越界钳到末桶")
+        XCTAssertEqual(PressureTier.bucketIndex(3.7), 39, "越界钳到末桶")
     }
 
-    /// 直方图 → 三档汇总（桶 0–4 / 5–10 / 11–19）。
+    /// 直方图 → 两档汇总（桶 0–19 轻 / 20–39 重）。
     func testTierCountsFromHistogram() {
         var histogram = Array(repeating: 0, count: PressureTier.histogramBuckets)
-        histogram[2] = 3   // light
-        histogram[7] = 4   // medium
-        histogram[13] = 5  // deep
+        histogram[2] = 3    // light
+        histogram[19] = 4   // light（0.95–1.0 区间）
+        histogram[20] = 5   // heavy（1.0–1.05 区间）
+        histogram[33] = 2   // heavy
         let tiers = PressureTier.tierCounts(in: histogram)
-        XCTAssertEqual(tiers.light, 3)
-        XCTAssertEqual(tiers.medium, 4)
-        XCTAssertEqual(tiers.deep, 5)
+        XCTAssertEqual(tiers.light, 7)
+        XCTAssertEqual(tiers.heavy, 7)
+    }
+
+    /// 旧 20 桶直方图（量程 0–1）→ 40 桶：零填充迁移无损（桶 i 压力区间一致）。
+    func testLegacyHistogramPadding() {
+        var legacy = Array(repeating: 0, count: PressureTier.legacyHistogramBuckets)
+        legacy[3] = 6
+        legacy[16] = 1
+        let padded = PressureTier.padLegacyHistogram(legacy)
+        XCTAssertEqual(padded.count, PressureTier.histogramBuckets)
+        XCTAssertEqual(padded[3], 6)
+        XCTAssertEqual(padded[16], 1)
+        XCTAssertEqual(padded.suffix(20).reduce(0, +), 0, "后半（0–1 区间外）应为空")
+        XCTAssertEqual(padded.reduce(0, +), 7, "总样本数守恒")
+        XCTAssertEqual(PressureTier.padLegacyHistogram(padded).count, PressureTier.histogramBuckets,
+                       "新格式数据重复填充必须原样返回")
     }
 
     // MARK: - 手掌误触防护
@@ -98,9 +117,9 @@ final class TrackpadEnhancementTests: XCTestCase {
 
     func testForceTouchClickThresholdDecoupledFromFingerTiers() {
         // Force Touch 深按判定（点击瞬间口径）与手指压力档（连续口径）
-        // 值域不同，必须独立标定，不允许联动。
+        // 值域不同，必须独立标定，不允许联动（用户拍板 0.9 保持不动）。
         XCTAssertEqual(EventMonitor.forceTouchClickThreshold, 0.9)
-        XCTAssertEqual(PressureTier.deepThreshold, 0.55)
+        XCTAssertEqual(PressureTier.heavyThreshold, 1.0)
     }
 
     /// 手势收缩后保留的官方事件直计类别照常进引擎与快照。
@@ -131,7 +150,7 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertEqual(snap.trackpadCounts[.zoom], 5, "历史 zoom 计数应保留并可见")
     }
 
-    // MARK: - 触点热力图（96×64）
+    // MARK: - 触点热力图（24×16）
 
     /// 归一化坐标 → 网格：左上角落第 0 行第 0 列，右下角落最后一格。
     func testIngestTouchpointGridMapping() {
@@ -142,8 +161,8 @@ final class TrackpadEnhancementTests: XCTestCase {
 
         let grid = engine.todayRecord().touchGrid
         XCTAssertEqual(grid.count, DailyRecord.touchGridCells)
-        XCTAssertEqual(DailyRecord.touchGridColumns, 96)
-        XCTAssertEqual(DailyRecord.touchGridRows, 64)
+        XCTAssertEqual(DailyRecord.touchGridColumns, 24)
+        XCTAssertEqual(DailyRecord.touchGridRows, 16)
         XCTAssertEqual(grid[0], 1, "左上角触点应落第 0 行第 0 列")
         let last = DailyRecord.touchGridCells - 1
         XCTAssertEqual(grid[last], 1, "右下角触点应落最后一格")
@@ -166,30 +185,29 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertEqual(engine.activeSecondsToday(), 0, accuracy: 0.001, "触点不应延长活跃输入段")
     }
 
-    /// 旧 24×16 网格 → 96×64 上采样：4×4 均摊、余数补齐、总量守恒，
-    /// 且降采样往返无损。
-    func testLegacyGridUpsampleAndDownsampleRoundtrip() {
+    /// 旧 96×64 网格 → 24×16：4×4 块求和、总量守恒、落点正确
+    /// （一次性迁移路径，2026-09-24 当天的 6144 格落盘数据保留不丢）。
+    func testLegacy96GridDownsampleMigration() {
         var legacy = Array(repeating: 0, count: DailyRecord.legacyTouchGridCells)
-        legacy[0] = 17     // 余数场景
-        legacy[100] = 32   // 整除场景
-        legacy[383] = 1
+        // 新格 (0,0) 的旧 4×4 块（legacy rows 0–3 × cols 0–3）：17 次全在 legacy[0]。
+        legacy[0] = 17
+        // 新格 (0,1) 的旧块（legacy cols 4–7）：32 次全在其首格 legacy[4]。
+        legacy[4] = 32
+        // 旧网格最后一格 (row 63, col 95) → 新网格最后一格 (row 15, col 23)。
+        legacy[DailyRecord.legacyTouchGridCells - 1] = 1
 
-        let upsampled = DailyRecord.upsampleLegacyTouchGrid(legacy)
-        XCTAssertEqual(upsampled.count, DailyRecord.touchGridCells)
-        XCTAssertEqual(upsampled.reduce(0, +), 50, "上采样必须守恒总计数")
-
-        // 旧格 0 的 4×4 块（新网格 rows 0–3 × cols 0–3）：17 = 1×16 + 1
-        // → 按块顺序首格 2，其余 1
-        XCTAssertEqual(upsampled[0], 2)
-        XCTAssertEqual(upsampled[1], 1)
-        XCTAssertEqual(upsampled[96], 1, "第二行首格属于旧格 0 的块")
-        XCTAssertEqual(upsampled[3 * 96 + 3], 1, "块内最后一格")
-
-        let downsampled = DailyRecord.downsampleTouchGridToLegacy(upsampled)
-        XCTAssertEqual(downsampled, legacy, "上采样 → 降采样必须还原旧网格")
+        let downsampled = DailyRecord.downsampleLegacyTouchGrid(legacy)
+        XCTAssertEqual(downsampled.count, DailyRecord.touchGridCells)
+        XCTAssertEqual(downsampled.reduce(0, +), 50, "降采样必须守恒总计数")
+        XCTAssertEqual(downsampled[0], 17, "旧块 (rows 0–3 × cols 0–3) → 新格 (0,0)")
+        XCTAssertEqual(downsampled[1], 32, "旧块 (rows 0–3 × cols 4–7) → 新格 (0,1)")
+        XCTAssertEqual(downsampled[DailyRecord.touchGridCells - 1], 1, "右下角落点对应")
+        // 长度不符时返回空网格（防御），不污染正常数据。
+        XCTAssertEqual(DailyRecord.downsampleLegacyTouchGrid([1, 2, 3]),
+                       Array(repeating: 0, count: DailyRecord.touchGridCells))
     }
 
-    /// 快照合并多天触点网格（今天 + 新格式历史 + 旧 384 格自动迁移上采样）。
+    /// 快照合并多天触点网格（今天 + 24×16 新格式历史 + 旧 96×64 自动迁移）。
     func testSnapshotMergesTouchGridAcrossDays() {
         var yesterday = DailyRecord(date: "2026-09-21")
         yesterday.touchGrid = Array(repeating: 0, count: DailyRecord.touchGridCells)
@@ -198,22 +216,18 @@ final class TrackpadEnhancementTests: XCTestCase {
 
         var legacyDay = DailyRecord(date: "2026-09-20")
         legacyDay.touchGrid = Array(repeating: 0, count: DailyRecord.legacyTouchGridCells)
-        legacyDay.touchGrid[3] = 8 // 旧 24×16 格式落盘（row 0, col 3）
+        legacyDay.touchGrid[3] = 8 // 旧 96×64 格式（row 0, col 3）→ 新格 (0,0) 的块
         try? store.save(legacyDay)
 
         let engine = makeEngine()
-        engine.ingestTouchpoint(normalizedX: 0.9, normalizedY: 0.9) // 今天某格 +1
+        engine.ingestTouchpoint(normalizedX: 0.9, normalizedY: 0.9) // 今天 (row 21, col 21) +1
 
         let snap = engine.snapshot(scope: .last7Days, store: store)
         XCTAssertEqual(snap.touchGrid.count, DailyRecord.touchGridCells)
-        XCTAssertEqual(snap.touchGrid[3], 4, "新格式历史日应直接逐格合并")
-        // 旧格 3（row 0, col 3）→ 新网格块 rows 0–3 × cols 12–15，
-        // 8 = 0×16 + 8 → 块内按顺序前 8 格各 1
-        XCTAssertEqual(snap.touchGrid[12], 1, "旧格 3 上采样块首格")
-        XCTAssertEqual(snap.touchGrid[15], 1, "旧格 3 上采样块（row 0 末列）")
-        XCTAssertEqual(snap.touchGrid[12 + 96], 1, "旧格 3 上采样块（row 1 首列）")
+        XCTAssertEqual(snap.touchGrid[3], 4, "新格式历史日直接逐格合并")
+        XCTAssertEqual(snap.touchGrid[0], 8, "旧 96×64 落盘日应降采样合并到新格 (0,0)")
         XCTAssertEqual(snap.touchTotal, 4 + 8 + 1, "总触碰数 = 新格式历史 + 旧格式历史 + 今天")
-        XCTAssertEqual(snap.touchPeak?.count, 4, "最热格为新格式历史日的 index 3")
+        XCTAssertEqual(snap.touchPeak?.count, 8, "最热格为旧格式迁移后的 index 0")
     }
 
     func testSnapshotTouchCountAndEmptyGrid() {
@@ -229,7 +243,7 @@ final class TrackpadEnhancementTests: XCTestCase {
     // MARK: - 存储兼容（增量字段容缺 + 白名单）
 
     /// 2026-09 增量字段之前落盘的 JSON（无 touchGrid / touchPressureHistogram）
-    /// 必须能解码，缺省为空；旧 24×16 网格解码时自动上采样。
+    /// 必须能解码，缺省为空。
     func testDecodeLegacyJSONWithoutNewFields() throws {
         let json = """
         {"date":"2026-09-01","keyCounts":{"A":2},"trackpadCounts":{"click":1,"zoom":3},
@@ -244,18 +258,29 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertNil(record.touchPressureAverage)
     }
 
-    /// 旧 384 格 touchGrid 的落盘 JSON 解码后自动迁移为 6144 格。
-    func testDecodeLegacyGridMigratesTo96x64() throws {
+    /// 旧 20 桶压力直方图落盘 JSON 解码后自动零填充为 40 桶。
+    func testDecodeLegacyHistogramPadsTo40Buckets() throws {
+        var legacy = Array(repeating: 0, count: PressureTier.legacyHistogramBuckets)
+        legacy[9] = 42
+        let data = try JSONEncoder().encode(DailyRecord(date: "2026-09-01", touchPressureHistogram: legacy))
+        let record = try JSONDecoder().decode(DailyRecord.self, from: data)
+        XCTAssertEqual(record.touchPressureHistogram.count, PressureTier.histogramBuckets)
+        XCTAssertEqual(record.touchPressureHistogram[9], 42)
+        XCTAssertEqual(record.touchPressureSamples, 42, "迁移必须守恒总样本数")
+    }
+
+    /// 旧 6144 格 touchGrid 的落盘 JSON 解码后自动迁移为 384 格。
+    func testDecodeLegacy96GridMigratesTo24x16() throws {
         var legacy = Array(repeating: 0, count: DailyRecord.legacyTouchGridCells)
         legacy[10] = 33
         let legacyJSONData = try JSONEncoder().encode(DailyRecord(date: "2026-09-01", touchGrid: legacy))
         let json = String(data: legacyJSONData, encoding: .utf8)!
 
         let record = try JSONDecoder().decode(DailyRecord.self, from: Data(json.utf8))
-        XCTAssertEqual(record.touchGrid.count, DailyRecord.touchGridCells, "旧网格应自动迁移为 96×64")
+        XCTAssertEqual(record.touchGrid.count, DailyRecord.touchGridCells, "旧网格应自动迁移为 24×16")
         XCTAssertEqual(record.touchGrid.reduce(0, +), 33, "迁移必须守恒总计数")
-        let downsampled = DailyRecord.downsampleTouchGridToLegacy(record.touchGrid)
-        XCTAssertEqual(downsampled[10], 33, "降采样后旧格位置计数不变")
+        // 6144 格 index 10 = row 0, col 10 → 新网格 (row 0, col 2)。
+        XCTAssertEqual(record.touchGrid[2], 33)
     }
 
     /// 新字段编码后必须在白名单内且可无损回环。
@@ -295,8 +320,8 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertEqual(snap.touchPressureHistogram[16], 1)
         XCTAssertEqual(snap.touchPressureSamples, 7)
         let tiers = snap.touchPressureTiers
-        XCTAssertEqual(tiers.light, 6)
-        XCTAssertEqual(tiers.deep, 1)
+        XCTAssertEqual(tiers.light, 7, "0.8 < 1.0 属轻按档")
+        XCTAssertEqual(tiers.heavy, 0)
     }
 
     func testCustomRangeSnapshotMergesPressureHistogram() {

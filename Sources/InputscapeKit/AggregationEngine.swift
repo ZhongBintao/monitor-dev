@@ -99,7 +99,7 @@ public final class AggregationEngine: @unchecked Sendable {
     // MARK: - 触点热力图
 
     /// 记一次触点（归一化坐标 0–1，x 左→右，y 上→下）。
-    /// 触点位置只按 96×64 网格按日聚合计数；触点是"存在"而非"操作"：
+    /// 触点位置只按 24×16 网格按日聚合计数；触点是"存在"而非"操作"：
     /// 不进 5 分钟桶、时段分布，也不延长活跃输入段。
     /// 由 MT 内部线程高频调用（~125Hz×触点数），只做格子累加。
     public func ingestTouchpoint(normalizedX: Double, normalizedY: Double, at date: Date? = nil) {
@@ -258,8 +258,7 @@ public final class AggregationEngine: @unchecked Sendable {
         var touchPressureHistogram = Array(repeating: 0, count: PressureTier.histogramBuckets)
         var activeSeconds = 0.0
 
-        for day in historical {
-            for (k, v) in day.keyCounts { keyCounts[k, default: 0] += v }
+        for day in historical {            for (k, v) in day.keyCounts { keyCounts[k, default: 0] += v }
             for (k, v) in day.comboCounts { comboCounts[k, default: 0] += v }
             for (k, v) in day.trackpadCounts { trackpadCounts[k, default: 0] += v }
             for (k, series) in day.hourlyByOp {
@@ -344,12 +343,12 @@ public final class AggregationEngine: @unchecked Sendable {
         )
     }
 
-    /// 触点网格逐格累加：source 为旧 24×16 网格时先 4×4 上采样再合并
-    /// （兼容任何来源的旧格式数据，不依赖 JSON 解码路径）。
+    /// 触点网格逐格累加：source 为旧 96×64 网格（6144 格）时先 4×4 块求和
+    /// 降采样再合并（一次性迁移路径，兼容任何来源的旧格式数据）。
     private func mergeTouchGrid(_ target: inout [Int], _ source: [Int]) {
         guard target.count == DailyRecord.touchGridCells else { return }
         if source.count == DailyRecord.legacyTouchGridCells {
-            mergeTouchGrid(&target, DailyRecord.upsampleLegacyTouchGrid(source))
+            mergeTouchGrid(&target, DailyRecord.downsampleLegacyTouchGrid(source))
             return
         }
         for (index, value) in source.enumerated() where index < target.count {
@@ -357,9 +356,13 @@ public final class AggregationEngine: @unchecked Sendable {
         }
     }
 
-    /// 压力直方图逐桶累加（容忍长度不符）。
+    /// 压力直方图逐桶累加（容忍长度不符；旧 20 桶零填充为 40 桶再合并）。
     private func mergeHistogram(_ target: inout [Int], _ source: [Int]) {
         guard target.count == PressureTier.histogramBuckets else { return }
+        if source.count == PressureTier.legacyHistogramBuckets {
+            mergeHistogram(&target, PressureTier.padLegacyHistogram(source))
+            return
+        }
         for (index, value) in source.enumerated() where index < target.count {
             target[index] += value
         }

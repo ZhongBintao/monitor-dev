@@ -57,12 +57,15 @@ public enum PermissionCenter {
 ///   数值类型投递（CGEventType 无手势命名 case，与 NSEvent 手势类型
 ///   一一对应：smartMagnify 32 / swipe 31，见 AppKit NSEvent.h）；
 /// - 只消费 smartMagnify（智能缩放，双指双击）与 swipe（三指轻扫）：
-///   收到事件计 1 次，无任何自定义判定逻辑；缩放分向 / 旋转 / 横滚 /
-///   滚动会话等自定义口径已于 2026-09-24 按用户决策删除；
+///   收到事件计 1 次，附短不应期吸收疑似重复投递（GestureRefractoryGate）；
+///   缩放分向 / 旋转 / 横滚等自定义口径已于 2026-09-24 按用户决策删除；
 /// - 回调内按 rawValue 过滤（非手势事件只做一次集合查找），
 ///   all-events 频率开销可忽略；
-/// - 点击压力（kCGMouseEventPressure）按轻/中/深三档统计，
-///   深按档阈值与 Force Touch 计数联动。
+/// - 滚动（scrollWheel）做会话化去抖（ScrollSessionAccumulator）：间隔
+///   < 250ms 的连续事件并入同一会话，会话结束按主导方向计 1 次上/下滚，
+///   总位移低于噪声门限的微动会话丢弃——一次滑动 = 1 次计数，不再逐事件；
+/// - 点击压力（kCGMouseEventPressure）按轻/重两档入直方图，
+///   Force Touch 深按判定阈值独立标定、禁止联动。
 public final class EventMonitor: @unchecked Sendable {
 
     public struct Handlers: Sendable {
@@ -108,6 +111,19 @@ public final class EventMonitor: @unchecked Sendable {
     /// 与手指压力分档（PressureTier，MTTouch 连续压力口径）值域不同，独立标定；
     /// 经验值 0.9，待 INPUTSCAPE_DEBUG_EVENTS 探针真机校准。
     public static let forceTouchClickThreshold: Double = 0.9
+
+    /// 滚动会话静默间隔（秒）：连续 scrollWheel 事件间隔超过该值即开新会话。
+    /// 惯性 momentum 事件间隔 < 16ms 自然并入会话尾。待真机标定。
+    public static let scrollSessionGap: TimeInterval = 0.25
+    /// 会话最小位移（|delta| 累计，行单位）：低于该值视为轻触微动噪声，丢弃。
+    /// 待真机标定。
+    public static let scrollMinimumDisplacement: Double = 3.0
+    /// 手势事件不应期（秒）：swipe / smartZoom 同类事件窗口内只计第一次。
+    /// 待真机标定。
+    public static let gestureRefractoryInterval: TimeInterval = 0.3
+    /// kCGScrollWheelEventScrollPhase 的 began 值（SDK 头文件实测 0x1）：
+    /// 新手势开始时强制结算上一会话，防止长惯性尾巴吞掉新手势。
+    private static let scrollPhaseBegan: Int64 = 0x1
 
     /// 组合键去抖：同一和弦在窗口内视为按键重复，不重复计数。
     public static let comboDebounceInterval: TimeInterval = 0.15
@@ -155,12 +171,19 @@ public final class EventMonitor: @unchecked Sendable {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var keepAliveTimer: Timer?
+    private var scrollFlushTimer: Timer?
     private let handlers: Handlers
     private let stateLock = NSLock()
     private var lastFlags: CGEventFlags = []
     private var capsLockPressed = false
     private var lastComboID: String?
     private var lastComboAt = Date.distantPast
+    /// 滚动会话去抖与手势不应期（仅 tap 回调/主 run loop 访问，stateLock 守护）。
+    private var scrollAccumulator = ScrollSessionAccumulator(
+        gap: EventMonitor.scrollSessionGap,
+        minimumDisplacement: EventMonitor.scrollMinimumDisplacement)
+    private var swipeGate = GestureRefractoryGate(interval: EventMonitor.gestureRefractoryInterval)
+    private var smartZoomGate = GestureRefractoryGate(interval: EventMonitor.gestureRefractoryInterval)
 
     public private(set) var isRunning = false
 
@@ -224,6 +247,12 @@ public final class EventMonitor: @unchecked Sendable {
         RunLoop.main.add(timer, forMode: .common)
         self.keepAliveTimer = timer
 
+        // 重启监听时清空去抖状态（上次会话可能残留）。
+        scrollAccumulator = ScrollSessionAccumulator(
+            gap: Self.scrollSessionGap,
+            minimumDisplacement: Self.scrollMinimumDisplacement)
+        swipeGate = GestureRefractoryGate(interval: Self.gestureRefractoryInterval)
+        smartZoomGate = GestureRefractoryGate(interval: Self.gestureRefractoryInterval)
         isRunning = true
         return true
     }
@@ -238,9 +267,17 @@ public final class EventMonitor: @unchecked Sendable {
             }
         }
         keepAliveTimer?.invalidate()
+        scrollFlushTimer?.invalidate()
+        // 结算未完成的滚动会话，避免停监听时丢最后一次滚动的计数。
+        if let d = scrollAccumulator.flush() {
+            handlers.onScroll?(d)
+        }
+        swipeGate.reset()
+        smartZoomGate.reset()
         tap = nil
         runLoopSource = nil
         keepAliveTimer = nil
+        scrollFlushTimer = nil
         isRunning = false
     }
 
@@ -346,7 +383,22 @@ public final class EventMonitor: @unchecked Sendable {
 
         case .scrollWheel:
             let delta = event.getDoubleValueField(.scrollWheelEventDeltaAxis1)
-            if delta != 0 { handlers.onScroll?(delta) }
+            guard delta != 0 else { break }
+            // CGEventTimestamp 单位为纳秒 → 换算秒（与会话间隔统一量纲）。
+            let t = Double(event.timestamp) / 1_000_000_000
+            var emitted: Double?
+            stateLock.lock()
+            // 新手势开始（phase began）强制结算上一会话，防止惯性尾巴吞并新手势。
+            if event.getIntegerValueField(.scrollWheelEventScrollPhase) == Self.scrollPhaseBegan {
+                emitted = scrollAccumulator.flush()
+            }
+            // 间隔超阈值时 accept 内部先结算上一会话再并入本事件。
+            if let closed = scrollAccumulator.accept(delta: delta, at: t) { emitted = closed }
+            stateLock.unlock()
+            // 会话结束才投递一次：+1 = 内容下移 / -1 = 内容上移
+            // （手指方向换算仍由聚合层按自然滚动设置处理）。
+            if let d = emitted { handlers.onScroll?(d) }
+            scheduleScrollFlush()
 
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             if type == .leftMouseDown {
@@ -407,6 +459,24 @@ public final class EventMonitor: @unchecked Sendable {
         }
     }
 
+    // MARK: - 滚动会话结算
+
+    /// 会话静默超时兜底：停止滚动后没有后续事件时，由该一次性 Timer
+    /// （延迟 = 会话间隔）结算并投递会话方向。每次滚动事件重排。
+    /// 仅在主 run loop 调用（tap 回调本就挂在主 run loop）。
+    private func scheduleScrollFlush() {
+        scrollFlushTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.scrollSessionGap, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.stateLock.lock()
+            let emitted = self.scrollAccumulator.flush()
+            self.stateLock.unlock()
+            if let d = emitted { self.handlers.onScroll?(d) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scrollFlushTimer = timer
+    }
+
     // MARK: - 官方手势事件（tap 投递的原始数值类型 → NSEvent）
 
     private func handlePossibleGestureEvent(type: CGEventType, event: CGEvent) {
@@ -416,11 +486,19 @@ public final class EventMonitor: @unchecked Sendable {
         if Self.debugEvents {
             Self.debugLog("gesture raw=\(raw) nsType=\(nsEvent.type.rawValue)")
         }
+        let t = nsEvent.timestamp
         switch nsEvent.type {
         case .smartMagnify:
-            handlers.onSmartZoom?()
+            // 不应期去抖：窗口内重复投递只计第一次。
+            stateLock.lock()
+            let accepted = smartZoomGate.shouldAccept(at: t)
+            stateLock.unlock()
+            if accepted { handlers.onSmartZoom?() }
         case .swipe:
-            handlers.onSwipe?()
+            stateLock.lock()
+            let accepted = swipeGate.shouldAccept(at: t)
+            stateLock.unlock()
+            if accepted { handlers.onSwipe?() }
         default:
             break
         }

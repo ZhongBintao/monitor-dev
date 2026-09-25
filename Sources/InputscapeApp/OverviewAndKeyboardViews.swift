@@ -6,6 +6,7 @@ import InputscapeKit
 
 struct OverviewView: View {
     @EnvironmentObject var model: AppModel
+    @State private var selectedTouchCell: TouchHeatmapPanel.Cell?
 
     var body: some View {
         ScrollView {
@@ -15,7 +16,7 @@ struct OverviewView: View {
                 rhythmCard
                 HStack(alignment: .top, spacing: 16) {
                     keyboardSummaryCard
-                    trackpadSummaryCard
+                    trackpadHeatmapCard
                 }
             }
             .padding(20)
@@ -52,13 +53,14 @@ struct OverviewView: View {
         let s = model.snapshot
         return Card {
             HStack(spacing: 0) {
-                StatCard(icon: "keyboard", value: formatCount(s.keyPresses), unit: "", label: " 次按键")
+                StatCard(icon: "keyboard", value: formatCount(s.keyPresses), title: "按键次数")
                     .frame(maxWidth: .infinity)
                 divider
-                StatCard(icon: "cursorarrow.click", value: formatCount(s.trackpadOps), unit: "", label: " 次触控操作", accent: Theme.coral)
+                StatCard(icon: "cursorarrow.click", value: formatCount(s.trackpadOps),
+                         title: "触控操作", accent: Theme.coral)
                     .frame(maxWidth: .infinity)
                 divider
-                StatCard(icon: "clock", value: formatDuration(s.activeSeconds), unit: "", label: " 活跃输入")
+                StatCard(icon: "clock", value: formatDuration(s.activeSeconds), title: "活跃输入")
                     .frame(maxWidth: .infinity)
             }
         }
@@ -166,11 +168,8 @@ struct OverviewView: View {
         let top = model.snapshot.topKeys(1).first
         return Card {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("键盘分布").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
-                    Spacer()
-                    PageLink(page: .keyboard, title: "查看键盘分布")
-                }
+                CardHeader(title: "键盘分布",
+                           trailing: AnyView(PageLink(page: .keyboard, title: "查看键盘分布")))
                 KeyboardHeatmapView(values: model.snapshot.keyCounts,
                                     selectedKeyID: $model.selectedKeyID,
                                     reduceMotion: model.reduceMotion,
@@ -194,50 +193,37 @@ struct OverviewView: View {
         }
     }
 
-    private var trackpadSummaryCard: some View {
-        let ranking = model.snapshot.trackpadRanking
-        let dominant = ranking.first
+    /// 触控板热力图卡（与左侧键盘分布卡配对）：24×16 热力面板 +
+    /// 数字色阶图例 + 最热/选中读数。取代原「触控板操作」摘要卡。
+    private var trackpadHeatmapCard: some View {
+        let snapshot = model.snapshot
+        let bounds = HeatLegend.boundaries(maxCount: snapshot.touchGrid.max() ?? 0,
+                                           steps: Theme.coralScale.count)
         return Card {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("触控板操作").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
-                    Spacer()
-                    PageLink(page: .trackpad, title: "查看触控板操作")
-                }
-                if let dominant {
-                    compositionBar(kind: dominant.kind, count: dominant.count, fraction: dominant.fraction)
-                    (Text("触控操作以 ").foregroundColor(Theme.secondary)
-                     + Text(dominant.kind.label).foregroundColor(Theme.coral).bold()
-                     + Text(" 为主，共 \(formatCount(dominant.count)) 次。").foregroundColor(Theme.secondary))
-                    .font(.system(size: 13))
+                CardHeader(title: "触控板热力图",
+                           trailing: AnyView(PageLink(page: .trackpad, title: "查看触控板操作")))
+                if snapshot.touchTotal == 0 {
+                    EmptyStateView(title: "暂无触点数据",
+                                   detail: "在触控板上操作后会自动累计触点位置分布。")
+                        .frame(height: 170)
                 } else {
-                    Text("暂无触控操作数据。").font(.system(size: 13)).foregroundColor(Theme.secondary)
+                    VStack(spacing: 8) {
+                        TouchHeatmapPanel(grid: snapshot.touchGrid,
+                                          boundaries: bounds,
+                                          selectedCell: $selectedTouchCell)
+                            .frame(maxWidth: 320)
+                        HeatLegendView(scale: Theme.coralScale, boundaries: bounds)
+                        TouchHeatmapFootnote(snapshot: snapshot, selectedCell: selectedTouchCell)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
                 if !model.deviceProfile.supportsForceTouch {
                     Text("当前设备不支持 Force Touch。")
                         .font(.system(size: 11)).foregroundColor(Theme.tertiary)
                 }
             }
-        }
-    }
-
-    private func compositionBar(kind: TrackpadOperationKind, count: Int, fraction: Double) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(kind.label).font(.system(size: 12)).foregroundColor(Theme.navy)
-                Spacer()
-                Text("\(formatCount(count)) 次 · \(Int((fraction * 100).rounded()))%")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(Theme.coral)
-            }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.coralSoft)
-                    Capsule().fill(Theme.coral)
-                        .frame(width: max(6, geo.size.width * fraction))
-                }
-            }
-            .frame(height: 8)
         }
     }
 
@@ -309,16 +295,16 @@ struct KeyboardDistributionView: View {
 
     private var metricsRow: some View {
         let s = model.snapshot
+        let scopeTitle = model.customRange == nil && model.scope == .today ? "今日按键" : "期间按键"
         return Card {
             HStack(spacing: 0) {
-                StatCard(icon: "keyboard", value: formatCount(s.keyPresses),
-                         unit: model.customRange == nil && model.scope == .today ? "今日" : "期间", label: "按键")
+                StatCard(icon: "keyboard", value: formatCount(s.keyPresses), title: scopeTitle)
                     .frame(maxWidth: .infinity)
                 Rectangle().fill(Theme.hairline).frame(width: 1, height: 40)
-                StatCard(icon: "square.grid.3x3", value: "78", unit: "", label: " 个物理键区")
+                StatCard(icon: "square.grid.3x3", value: "78", title: "物理键区")
                     .frame(maxWidth: .infinity)
                 Rectangle().fill(Theme.hairline).frame(width: 1, height: 40)
-                StatCard(icon: "clock", value: formatDuration(s.activeSeconds), unit: "", label: " 活跃输入")
+                StatCard(icon: "clock", value: formatDuration(s.activeSeconds), title: "活跃输入")
                     .frame(maxWidth: .infinity)
             }
         }
@@ -327,12 +313,9 @@ struct KeyboardDistributionView: View {
     private var heatmapCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("键位使用分布").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
-                    Spacer()
-                    heatLegend
-                }
-                Text("颜色越深表示该键位使用越频繁；选中键位可在下方查看具体数字。")
+                CardHeader(title: "键位使用分布",
+                           trailing: AnyView(heatLegend))
+                Text("颜色越深表示该键位使用越频繁；选中键位可在下方查看具体数字。图例为当前数据的实际次数区间。")
                     .font(.system(size: 12)).foregroundColor(Theme.secondary)
                 KeyboardHeatmapView(values: model.snapshot.keyCounts,
                                     selectedKeyID: $selectedKeyID,
@@ -343,17 +326,15 @@ struct KeyboardDistributionView: View {
         }
     }
 
+    /// 数字色阶图例：与键盘渲染共用 HeatLegend 分档，标注实际次数区间。
     private var heatLegend: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<Theme.heatScale.count, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Theme.heatScale[i])
-                    .frame(width: 18, height: 12)
+        let maxCount = model.snapshot.keyCounts.values.max() ?? 0
+        return Group {
+            if maxCount > 0 {
+                HeatLegendView(scale: Theme.heatScale,
+                               boundaries: HeatLegend.boundaries(maxCount: maxCount,
+                                                                 steps: Theme.heatScale.count))
             }
-            VStack(alignment: .trailing, spacing: 0) {
-                Text("低频 → 高频").font(.system(size: 10)).foregroundColor(Theme.secondary)
-            }
-            .padding(.leading, 4)
         }
     }
 

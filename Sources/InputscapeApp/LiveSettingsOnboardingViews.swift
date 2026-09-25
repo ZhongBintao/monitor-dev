@@ -336,25 +336,8 @@ struct SettingsView: View {
                     set: { model.setForceTouchSupport($0) }
                 ))
 
-                // 触点热力图显示模式（数据层统一 96×64，模式只影响渲染）。
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("触点热力图显示模式")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(Theme.secondary)
-                    Picker("热力图显示模式", selection: Binding(
-                        get: { model.heatmapDisplayMode },
-                        set: { model.setHeatmapDisplayMode($0) }
-                    )) {
-                        ForEach(HeatmapDisplayMode.allCases, id: \.self) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 400)
-                    Text("触点热力图读取系统触控板多点触控数据，把触点位置按 96×64 网格按日聚合计数（不保存轨迹、原始触点流或屏幕坐标）；「网格 24×16」为降采样方块视图，「连续 96×64」为高斯扩散的无级热力面，两种模式渲染同一份数据。设备不支持时无数据。首版基准为 MacBook Pro 14/16 英寸 US ANSI 键盘；ISO、JIS 与 Magic Keyboard 模板将在后续版本提供。")
-                        .font(.system(size: 11)).foregroundColor(Theme.tertiary)
-                }
+                Text("触点热力图读取系统触控板多点触控数据，把触点位置按 24×16 网格按日聚合计数（不保存轨迹、原始触点流或屏幕坐标），色阶按实际次数线性分档并标注数字区间。设备不支持时无数据。首版基准为 MacBook Pro 14/16 英寸 US ANSI 键盘；ISO、JIS 与 Magic Keyboard 模板将在后续版本提供。")
+                    .font(.system(size: 11)).foregroundColor(Theme.tertiary)
             }
         }
     }
@@ -413,8 +396,8 @@ struct SettingsView: View {
                 Text("数据与隐私").font(.system(size: 16, weight: .bold)).foregroundColor(Theme.navy)
                 VStack(alignment: .leading, spacing: 6) {
                     bullet("仅保存本地聚合统计：每日按键数、触控操作数、活跃输入时长、5 分钟桶与键位计数。")
-                    bullet("按压强度仅按手指连续压力的 20 桶直方图聚合（按帧计数），不保存原始压力序列。")
-                    bullet("触点热力图仅保存 96×64 网格触碰计数，不保存轨迹、原始触点流或屏幕坐标。")
+                    bullet("按压强度仅按手指连续压力的 40 桶直方图聚合（量程 0–2，按帧计数），不保存原始压力序列。")
+                    bullet("触点热力图仅保存 24×16 网格触碰计数，不保存轨迹、原始触点流或屏幕坐标。")
                     bullet("不记录文字内容、按键序列、应用名称、屏幕坐标或原始事件。")
                     bullet("不提供云同步、导出或账号体系；历史数据持续保留在本机。")
                     bullet("实时观察状态仅保存在内存中，退出即丢弃。")

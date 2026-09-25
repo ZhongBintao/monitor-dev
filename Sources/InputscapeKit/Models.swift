@@ -66,56 +66,59 @@ public enum TrackpadOperationKind: String, CaseIterable, Codable, Sendable {
 
 // MARK: - 手指按压强度分档
 
-/// 手指按压强度三档（MTTouch 手指压力 0–1 连续值，按帧聚合）。
-/// 数据源为触控板硬件的连续压力读数（真随按压力度变化）；
-/// 旧方案 kCGMouseEventPressure（点击瞬间标量，多数触控板恒值）已废弃。
-/// 阈值为经验值（0.25 / 0.55），探针真机标定后调整。
+/// 手指按压强度两档（MTTouch 手指压力连续值，按帧聚合）。
+/// 分界经真机标定：< 1.0 轻按，≥ 1.0 重按（zTotal 电容总量实测可超 1，
+/// 旧 0.25/0.55 三档无区分度，已废弃）。
+/// Force Touch 深按判定（EventMonitor.forceTouchClickThreshold，点击瞬间口径）
+/// 值域不同，独立标定、禁止联动。
 public enum PressureTier: String, CaseIterable, Codable, Sendable {
     case light
-    case medium
-    case deep
+    case heavy
 
-    /// 轻 → 中分界：pressure ≥ 0.25 视为中按。
-    public static let mediumThreshold: Double = 0.25
-    /// 中 → 深分界：pressure ≥ 0.55 视为深按。
-    public static let deepThreshold: Double = 0.55
+    /// 轻 → 重分界：pressure ≥ 1.0 视为重按。
+    public static let heavyThreshold: Double = 1.0
+    /// 压力直方图桶数：40 桶 × 0.05 步进，量程 0–2（>2 钳制末桶）。
+    /// 旧 20 桶（量程 0–1）数据解码/合并时零填充迁移——桶 i 压力区间不变，无损。
+    public static let histogramBuckets = 40
+    /// 旧版直方图桶数（2026-09-24 之前落盘，量程 0–1）。
+    public static let legacyHistogramBuckets = 20
+    /// 单桶压力宽度（0.05；2.0 / 40）。
+    public static let bucketWidth: Double = 0.05
 
-    /// 压力直方图桶数：20 桶 × 0.05 步进（0.25/0.55 恰好对齐桶边界）。
-    public static let histogramBuckets = 20
-
-    /// 压力 → 直方图桶序号（越界钳制）。
+    /// 压力 → 直方图桶序号（越界钳制；1.0 恰落桶 20 = 重按首桶）。
+    /// 用 rounded 而非截断：0.05 非二进制精确值，截断会把 0.55 落错桶。
     public static func bucketIndex(_ pressure: Double) -> Int {
-        min(histogramBuckets - 1, max(0, Int(pressure * Double(histogramBuckets))))
+        min(histogramBuckets - 1, max(0, Int((pressure / bucketWidth).rounded())))
     }
 
     /// 桶序号 → 桶中心压力（直方图近似均值用）。
     public static func bucketCenter(_ index: Int) -> Double {
-        (Double(index) + 0.5) / Double(histogramBuckets)
+        (Double(index) + 0.5) * bucketWidth
     }
 
     public static func classify(_ pressure: Double) -> PressureTier {
-        if pressure >= deepThreshold { return .deep }
-        if pressure >= mediumThreshold { return .medium }
-        return .light
+        pressure >= heavyThreshold ? .heavy : .light
     }
 
-    /// 直方图 → 三档汇总（0–0.249… 轻；0.25–0.549… 中；≥0.55 深，
-    /// 即桶 0–4 / 5–10 / 11–19）。
-    public static func tierCounts(in histogram: [Int]) -> (light: Int, medium: Int, deep: Int) {
-        var light = 0, medium = 0, deep = 0
+    /// 直方图 → 两档汇总（桶 0–19 轻 / 20–39 重；1.0 = 桶 20 起重）。
+    public static func tierCounts(in histogram: [Int]) -> (light: Int, heavy: Int) {
+        var light = 0, heavy = 0
         for (index, count) in histogram.enumerated() {
-            if index < 5 { light += count }
-            else if index < 11 { medium += count }
-            else { deep += count }
+            if index < histogramBuckets / 2 { light += count } else { heavy += count }
         }
-        return (light, medium, deep)
+        return (light, heavy)
+    }
+
+    /// 旧 20 桶直方图 → 40 桶：零填充（新旧桶 i 压力区间一致，无损）。
+    public static func padLegacyHistogram(_ histogram: [Int]) -> [Int] {
+        guard histogram.count == legacyHistogramBuckets else { return histogram }
+        return histogram + Array(repeating: 0, count: histogramBuckets - legacyHistogramBuckets)
     }
 
     public var label: String {
         switch self {
         case .light: return "轻按"
-        case .medium: return "中按"
-        case .deep: return "深按"
+        case .heavy: return "重按"
         }
     }
 }
@@ -166,22 +169,20 @@ public struct DailyRecord: Codable, Sendable, Equatable {
     public var hourlyByOp: [String: [Int]]
     /// 活跃输入秒数（输入段模型：连续 60 秒无事件即结束当前段）。
     public var activeSeconds: Double
-    /// 触控板触点热力图：96×64 网格按日触碰计数（行主序，row 0 = 顶行）。
-    /// 触点位置仅按网格聚合，不保存轨迹、原始触点流或屏幕坐标；
-    /// 「24×16 网格」显示模式由本网格 4×4 降采样渲染。
+    /// 触控板触点热力图：24×16 网格按日触碰计数（行主序，row 0 = 顶行）。
+    /// 触点位置仅按网格聚合，不保存轨迹、原始触点流或屏幕坐标。
     public var touchGrid: [Int]
-    /// 手指按压强度直方图：20 桶 × 0.05 步进（0–1），按 MTTouch 帧聚合。
+    /// 手指按压强度直方图：40 桶 × 0.05 步进（量程 0–2），按 MTTouch 帧聚合。
     /// 帧累计即按压时长权重：按压越久、越重，对应桶计数越高。
     public var touchPressureHistogram: [Int]
 
-    /// 热力图网格规格：96×64 = 6144 格（一格约 1.7mm；
-    /// 旧 24×16 = 384 格数据在解码时自动 4×4 上采样迁移）。
-    public static let touchGridColumns = 96
-    public static let touchGridRows = 64
+    /// 热力图网格规格：24×16 = 384 格。
+    public static let touchGridColumns = 24
+    public static let touchGridRows = 16
     public static let touchGridCells = touchGridColumns * touchGridRows
-    /// 旧版网格规格（2026-09-24 之前落盘）。
-    public static let legacyTouchGridColumns = 24
-    public static let legacyTouchGridRows = 16
+    /// 旧 96×64 落盘规格（2026-09-24 当天的数据；解码/合并时 4×4 块求和降采样迁移）。
+    public static let legacyTouchGridColumns = 96
+    public static let legacyTouchGridRows = 64
     public static let legacyTouchGridCells = legacyTouchGridColumns * legacyTouchGridRows
 
     public init(date: String,
@@ -206,7 +207,8 @@ public struct DailyRecord: Codable, Sendable, Equatable {
 
     /// 自定义解码：touchGrid / touchPressureHistogram 为 2026-09 增量字段，
     /// 旧落盘 JSON 不含它们，用 decodeIfPresent 容缺；
-    /// 旧 384 格网格在解码时自动 4×4 上采样迁移为 6144 格。
+    /// 旧 96×64 网格（6144 格）在解码时自动 4×4 块求和降采样为 384 格；
+    /// 旧 20 桶压力直方图自动零填充为 40 桶。
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         date = try container.decode(String.self, forKey: .date)
@@ -218,54 +220,29 @@ public struct DailyRecord: Codable, Sendable, Equatable {
         activeSeconds = try container.decode(Double.self, forKey: .activeSeconds)
         let decodedGrid = try container.decodeIfPresent([Int].self, forKey: .touchGrid) ?? []
         touchGrid = decodedGrid.count == DailyRecord.legacyTouchGridCells
-            ? DailyRecord.upsampleLegacyTouchGrid(decodedGrid)
+            ? DailyRecord.downsampleLegacyTouchGrid(decodedGrid)
             : decodedGrid
-        touchPressureHistogram = try container.decodeIfPresent([Int].self,
-                                                               forKey: .touchPressureHistogram) ?? []
+        touchPressureHistogram = PressureTier.padLegacyHistogram(
+            try container.decodeIfPresent([Int].self, forKey: .touchPressureHistogram) ?? [])
     }
 
-    /// 旧 24×16 网格 → 96×64：每旧格对应新网格 4×4 块，计数均摊
-    /// （余数按块顺序补齐）。旧数据粒度粗，均摊后经高斯渲染反而更平滑诚实。
-    public static func upsampleLegacyTouchGrid(_ legacy: [Int]) -> [Int] {
-        guard legacy.count == legacyTouchGridCells else { return legacy }
-        var out = Array(repeating: 0, count: touchGridCells)
-        let factor = touchGridColumns / legacyTouchGridColumns // 4
-        for row in 0..<legacyTouchGridRows {
-            for column in 0..<legacyTouchGridColumns {
-                let value = legacy[row * legacyTouchGridColumns + column]
-                guard value > 0 else { continue }
-                let base = value / (factor * factor)
-                var remainder = value % (factor * factor)
-                for dr in 0..<factor {
-                    for dc in 0..<factor {
-                        let index = (row * factor + dr) * touchGridColumns + (column * factor + dc)
-                        if remainder > 0 {
-                            out[index] = base + 1
-                            remainder -= 1
-                        } else {
-                            out[index] = base
-                        }
-                    }
-                }
-            }
+    /// 旧 96×64 网格（6144 格）→ 24×16（384 格）：每 4×4 块求和，
+    /// 一次性迁移路径（2026-09-24 当天按 96×64 落盘的数据，保留不丢）。
+    public static func downsampleLegacyTouchGrid(_ grid: [Int]) -> [Int] {
+        guard grid.count == legacyTouchGridCells else {
+            return Array(repeating: 0, count: touchGridCells)
         }
-        return out
-    }
-
-    /// 96×64 网格 → 24×16 显示口径：每 4×4 块求和（热力卡网格模式用）。
-    public static func downsampleTouchGridToLegacy(_ grid: [Int]) -> [Int] {
-        guard grid.count == touchGridCells else { return Array(repeating: 0, count: legacyTouchGridCells) }
-        var out = Array(repeating: 0, count: legacyTouchGridCells)
-        let factor = touchGridColumns / legacyTouchGridColumns // 4
-        for row in 0..<legacyTouchGridRows {
-            for column in 0..<legacyTouchGridColumns {
+        var out = Array(repeating: 0, count: touchGridCells)
+        let factor = legacyTouchGridColumns / touchGridColumns // 4
+        for row in 0..<touchGridRows {
+            for column in 0..<touchGridColumns {
                 var sum = 0
                 for dr in 0..<factor {
                     for dc in 0..<factor {
-                        sum += grid[(row * factor + dr) * touchGridColumns + (column * factor + dc)]
+                        sum += grid[(row * factor + dr) * legacyTouchGridColumns + (column * factor + dc)]
                     }
                 }
-                out[row * legacyTouchGridColumns + column] = sum
+                out[row * touchGridColumns + column] = sum
             }
         }
         return out
@@ -302,24 +279,6 @@ public struct DailyRecord: Codable, Sendable, Equatable {
         "date", "keyCounts", "trackpadCounts", "comboCounts", "buckets", "hourlyByOp", "activeSeconds",
         "touchGrid", "touchPressureHistogram"
     ]
-}
-
-// MARK: - 热力图显示模式
-
-/// 触点热力图显示模式：数据层统一为 96×64 网格，
-/// 两种模式是同一份数据的不同渲染口径。
-public enum HeatmapDisplayMode: String, CaseIterable, Codable, Sendable {
-    /// 网格：24×16 方块（由 96×64 数据 4×4 降采样，与首版视觉一致）。
-    case grid
-    /// 连续：96×64 高分辨率 + 高斯扩散，视觉为一整块无级热力面。
-    case continuous
-
-    public var label: String {
-        switch self {
-        case .grid: return "网格 24×16"
-        case .continuous: return "连续 96×64"
-        }
-    }
 }
 
 // MARK: - 设备档案
@@ -445,9 +404,9 @@ public struct AggregateSnapshot: Sendable, Equatable {
     public var hourlyByOp: [TrackpadOperationKind: [Int]]
     /// 按日序列（旧 → 新）。
     public var daySeries: [DaySeriesPoint]
-    /// 触点热力图网格（多日合并，96×64 = 6144 格）。
+    /// 触点热力图网格（多日合并，24×16 = 384 格）。
     public var touchGrid: [Int]
-    /// 手指按压强度直方图（多日合并，20 桶 × 0.05）。
+    /// 手指按压强度直方图（多日合并，40 桶 × 0.05，量程 0–2）。
     public var touchPressureHistogram: [Int]
 
     public init(scope: PeriodScope, dayCount: Int, keyPresses: Int, trackpadOps: Int,
@@ -518,8 +477,8 @@ public struct AggregateSnapshot: Sendable, Equatable {
         return weighted / Double(samples)
     }
 
-    /// 手指按压三档汇总（多日合并）。
-    public var touchPressureTiers: (light: Int, medium: Int, deep: Int) {
+    /// 手指按压两档汇总（多日合并）。
+    public var touchPressureTiers: (light: Int, heavy: Int) {
         PressureTier.tierCounts(in: touchPressureHistogram)
     }
 

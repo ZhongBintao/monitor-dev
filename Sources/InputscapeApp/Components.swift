@@ -24,13 +24,41 @@ struct Card<Content: View>: View {
     }
 }
 
+// MARK: - 卡片标题行（统一标题排版：主标题 + 可选 ⓘ + 可选右侧内容）
+
+struct CardHeader: View {
+    let title: String
+    var help: String?
+    var trailing: AnyView?
+
+    init(title: String, help: String? = nil, trailing: AnyView? = nil) {
+        self.title = title
+        self.help = help
+        self.trailing = trailing
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(Theme.navy)
+            if let help {
+                HelpMarker(text: help)
+            }
+            Spacer()
+            trailing
+        }
+    }
+}
+
 // MARK: - 指标卡
 
+/// 统一指标卡：图标 + 主数值 + 指标名。标签语法全站统一为
+/// 「值 + 指标名」（如 1,234 / 按键次数），不再用 unit/label 拼接 hack。
 struct StatCard: View {
     let icon: String
     let value: String
-    let unit: String
-    let label: String
+    let title: String
     var accent: Color = Theme.navy
 
     var body: some View {
@@ -45,9 +73,72 @@ struct StatCard: View {
                     .foregroundColor(Theme.navy)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                Text("\(unit)\(label)")
+                Text(title)
                     .font(.system(size: 13))
                     .foregroundColor(Theme.secondary)
+            }
+        }
+    }
+}
+
+// MARK: - 热力图数字色阶（分档与图例的唯一事实源）
+
+/// 渲染与图例共用的线性分档：边界 b_k = ceil(max × k / steps)，
+/// 桶 k 覆盖 (b_{k-1}, b_k]。任何热力面着色都必须走同一函数，
+/// 图例数字才能与格子颜色一一对应。
+enum HeatLegend {
+
+    /// 分档边界（长度 steps+1）：b[0]=0 … b[steps]=maxCount。
+    static func boundaries(maxCount: Int, steps: Int) -> [Int] {
+        guard maxCount > 0, steps > 0 else { return Array(repeating: 0, count: steps + 1) }
+        return (0...steps).map { Int(ceil(Double(maxCount) * Double($0) / Double(steps))) }
+    }
+
+    /// 计数 → 桶序号（0 = 零计数淡底，1…steps = 色阶档位）。
+    static func bucketIndex(count: Int, boundaries: [Int]) -> Int {
+        guard count > 0 else { return 0 }
+        let steps = boundaries.count - 1
+        guard steps > 0 else { return 0 }
+        // 桶 k 覆盖 (b[k-1], b[k]]；线性查找即可（steps ≤ 9）。
+        for k in 1...steps where count <= boundaries[k] {
+            return k
+        }
+        return steps
+    }
+
+    /// 桶序号 → 图例数字标签：0 / 单值 / 区间 / 末档 max+。
+    static func label(forBucket bucket: Int, boundaries: [Int]) -> String {
+        let steps = boundaries.count - 1
+        guard bucket >= 0, bucket <= steps else { return "" }
+        if bucket == 0 { return "0" }
+        if bucket == steps { return "\(boundaries[steps])+" }
+        let lower = boundaries[bucket - 1] + 1
+        let upper = boundaries[bucket]
+        if lower >= upper { return "\(upper)" }
+        return "\(lower)–\(upper)"
+    }
+}
+
+/// 热力图数字色阶图例：每档色块 + 实际次数区间（不用「低频/高频」文案）。
+/// boundaries 必须来自与渲染面板相同的一次 HeatLegend.boundaries 调用。
+struct HeatLegendView: View {
+    let scale: [Color]
+    let boundaries: [Int]
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 7) {
+            ForEach(Array(scale.enumerated()), id: \.offset) { index, color in
+                VStack(spacing: 3) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(color)
+                        .frame(width: 20, height: 11)
+                        .overlay(RoundedRectangle(cornerRadius: 2)
+                            .stroke(Theme.hairline, lineWidth: 0.5))
+                    Text(HeatLegend.label(forBucket: index, boundaries: boundaries))
+                        .font(.system(size: 10))
+                        .monospacedDigit()
+                        .foregroundColor(Theme.secondary)
+                }
             }
         }
     }
