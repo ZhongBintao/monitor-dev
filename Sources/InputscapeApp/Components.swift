@@ -81,45 +81,9 @@ struct StatCard: View {
     }
 }
 
-// MARK: - 热力图数字色阶（分档与图例的唯一事实源）
+// MARK: - 热力图数字色阶图例
 
-/// 渲染与图例共用的线性分档：边界 b_k = ceil(max × k / steps)，
-/// 桶 k 覆盖 (b_{k-1}, b_k]。任何热力面着色都必须走同一函数，
-/// 图例数字才能与格子颜色一一对应。
-enum HeatLegend {
-
-    /// 分档边界（长度 steps+1）：b[0]=0 … b[steps]=maxCount。
-    static func boundaries(maxCount: Int, steps: Int) -> [Int] {
-        guard maxCount > 0, steps > 0 else { return Array(repeating: 0, count: steps + 1) }
-        return (0...steps).map { Int(ceil(Double(maxCount) * Double($0) / Double(steps))) }
-    }
-
-    /// 计数 → 桶序号（0 = 零计数淡底，1…steps = 色阶档位）。
-    static func bucketIndex(count: Int, boundaries: [Int]) -> Int {
-        guard count > 0 else { return 0 }
-        let steps = boundaries.count - 1
-        guard steps > 0 else { return 0 }
-        // 桶 k 覆盖 (b[k-1], b[k]]；线性查找即可（steps ≤ 9）。
-        for k in 1...steps where count <= boundaries[k] {
-            return k
-        }
-        return steps
-    }
-
-    /// 桶序号 → 图例数字标签：0 / 单值 / 区间 / 末档 max+。
-    static func label(forBucket bucket: Int, boundaries: [Int]) -> String {
-        let steps = boundaries.count - 1
-        guard bucket >= 0, bucket <= steps else { return "" }
-        if bucket == 0 { return "0" }
-        if bucket == steps { return "\(boundaries[steps])+" }
-        let lower = boundaries[bucket - 1] + 1
-        let upper = boundaries[bucket]
-        if lower >= upper { return "\(upper)" }
-        return "\(lower)–\(upper)"
-    }
-}
-
-/// 热力图数字色阶图例：每档色块 + 实际次数区间（不用「低频/高频」文案）。
+/// 每档色块 + 实际次数区间（分档逻辑在 Kit 的 HeatLegend，渲染/图例同源）。
 /// boundaries 必须来自与渲染面板相同的一次 HeatLegend.boundaries 调用。
 struct HeatLegendView: View {
     let scale: [Color]
@@ -134,7 +98,7 @@ struct HeatLegendView: View {
                         .frame(width: 20, height: 11)
                         .overlay(RoundedRectangle(cornerRadius: 2)
                             .stroke(Theme.hairline, lineWidth: 0.5))
-                    Text(HeatLegend.label(forBucket: index, boundaries: boundaries))
+                    Text(HeatLegend.label(forStep: index, boundaries: boundaries))
                         .font(.system(size: 10))
                         .monospacedDigit()
                         .foregroundColor(Theme.secondary)
