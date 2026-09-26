@@ -70,14 +70,21 @@ public final class PressureCalibrationSession {
     }
 
     public struct Result: Equatable, Sendable {
-        /// 学到的轻/重分界（两类中位数的均值）。
+        /// 学到的轻/重分界（轻按中位与重按 P90 的均值）。
         public let threshold: Double
         public let lightMedian: Double
-        public let heavyMedian: Double
+        /// 重按代表值：重按阶段样本的 P90（nearest-rank）。
+        /// 不用中位数——无 stage 信号机型按阶段标注时，重按阶段按压
+        /// 间歇的基线接触（zTotal ≈ 0.875 稳态）占样本多数（占空比
+        /// 由用户按压节奏决定），中位数被基线拖到 ~0.9，与轻按中位差
+        /// < 0.2，校准恒失败（实测 2026-09-26/27，落盘数据佐证：
+        /// 正常使用全天峰值 ≤0.95，重按 1.2–1.95）。P90 落在按压峰值
+        /// 簇内，抗占空比污染。
+        public let heavyP90: Double
         public let lightSamples: Int
         public let heavySamples: Int
-        /// 类间分离度（重按中位数 − 轻按中位数）。
-        public var separation: Double { heavyMedian - lightMedian }
+        /// 类间分离度（重按代表值 − 轻按中位数）。
+        public var separation: Double { heavyP90 - lightMedian }
         /// 成功条件：两类样本充足且分离度达到最小差（否则保留默认阈值）。
         public var isSuccess: Bool {
             separation >= Self.minimumSeparation
@@ -159,13 +166,14 @@ public final class PressureCalibrationSession {
     public var heavySampleCount: Int { heavySamples.count }
 
     /// 结束采集并计算结果（采样不足/分离不足时 isSuccess = false，
-    /// 调用方保留默认阈值）。
+    /// 调用方保留默认阈值）。轻按信号是稳态接触 → 中位数；重按信号是
+    /// 瞬态峰值、且阶段内混有按压间歇基线 → P90（见 Result.heavyP90）。
     public func compute() -> Result {
         let light = Self.median(lightSamples)
-        let heavy = Self.median(heavySamples)
+        let heavy = Self.percentile(90, of: heavySamples)
         return Result(threshold: (light + heavy) / 2,
                       lightMedian: light,
-                      heavyMedian: heavy,
+                      heavyP90: heavy,
                       lightSamples: lightSamples.count,
                       heavySamples: heavySamples.count)
     }
@@ -184,6 +192,14 @@ public final class PressureCalibrationSession {
         let middle = sorted.count / 2
         if sorted.count % 2 == 1 { return sorted[middle] }
         return (sorted[middle - 1] + sorted[middle]) / 2
+    }
+
+    /// nearest-rank 分位数：P90 of n = 第 ceil(0.9·n) 小的值。
+    private static func percentile(_ p: Double, of values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let rank = Int((p / 100.0 * Double(sorted.count)).rounded(.up))
+        return sorted[min(sorted.count - 1, max(0, rank - 1))]
     }
 }
 

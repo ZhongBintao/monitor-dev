@@ -60,11 +60,11 @@ final class PressureStageTests: XCTestCase {
 
         let result = session.compute()
         XCTAssertTrue(result.isSuccess, "分离度 \(result.separation) 应达标")
-        // 轻按中位 (0.49+0.50)/2 = 0.495 / 重按中位 (1.39+1.40)/2 = 1.395
-        // → 分界 0.945。
+        // 轻按中位 (0.49+0.50)/2 = 0.495；重按 P90（nearest-rank，
+        // 40 样本取第 36 小）= 1.20 + 35×0.01 = 1.55 → 分界 1.0225。
         XCTAssertEqual(result.lightMedian, 0.495, accuracy: 1e-9)
-        XCTAssertEqual(result.heavyMedian, 1.395, accuracy: 1e-9)
-        XCTAssertEqual(result.threshold, 0.945, accuracy: 1e-9)
+        XCTAssertEqual(result.heavyP90, 1.55, accuracy: 1e-9)
+        XCTAssertEqual(result.threshold, 1.0225, accuracy: 1e-9)
     }
 
     /// 交叉污染防御：轻按阶段用户误重按，样本按实时 stage 归重类。
@@ -184,6 +184,29 @@ final class PressureStageTests: XCTestCase {
         XCTAssertEqual(session.lightSampleCount, 40)
         XCTAssertEqual(session.heavySampleCount, 40)
         XCTAssertTrue(session.compute().isSuccess)
+    }
+
+    /// 重按代表值必须抗占空比污染（实测校准失败的根因）：
+    /// 无 stage 信号机型按阶段标注时，重按阶段按压间歇的基线接触
+    /// （zTotal ≈ 0.85 稳态）占样本多数（本例 80%），中位数被基线
+    /// 拖死（0.85 − 0.75 = 0.1 < 0.2 恒失败）；P90 落在按压峰值簇内，
+    /// 校准可正常完成。落盘数据佐证：正常使用全天峰值 ≤0.95，
+    /// 重按 1.2–1.95（2026-09-24/26 直方图）。
+    @MainActor
+    func testHeavyP90ResistsDutyCycleContamination() async {
+        let session = PressureCalibrationSession()
+        session.beginLightCollection()
+        for _ in 0..<40 { session.recordContactPressure(0.75) }   // 轻按稳态
+        session.beginHeavyCollection()
+        for _ in 0..<80 { session.recordContactPressure(0.85) }   // 按压间歇基线
+        for i in 0..<20 { session.recordContactPressure(1.50 + Double(i) * 0.01) } // 峰值 1.50–1.69
+
+        let result = session.compute()
+        // P90（nearest-rank，100 样本取第 90 小）= 1.50 + 9×0.01 = 1.59。
+        XCTAssertEqual(result.heavyP90, 1.59, accuracy: 1e-9)
+        XCTAssertEqual(result.lightMedian, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(result.threshold, 1.17, accuracy: 1e-9)
+        XCTAssertTrue(result.isSuccess, "分离度 \(result.separation) 应达标（中位数口径为 0.1，必挂）")
     }
 
     // MARK: - PressureCalibrationStore

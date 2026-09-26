@@ -521,7 +521,8 @@ public final class AppModel: ObservableObject {
     }
 
     /// 实际生效的轻/重分界：校准激活用学习值，否则系统默认 1.0。
-    private var effectivePressureThreshold: Double {
+    /// 点击判定（engine 阈值）、实时徽章压力回退共用此口径。
+    public var effectivePressureThreshold: Double {
         pressureCalibration.isActive
             ? (pressureCalibration.threshold ?? PressureTier.heavyThreshold)
             : PressureTier.heavyThreshold

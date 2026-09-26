@@ -95,19 +95,21 @@ struct PressureTestCalibrationView: View {
                         .font(.system(size: 11)).foregroundColor(Theme.tertiary)
                 }
                 HStack(spacing: 16) {
-                    // 实时判定徽章（周期刷新超时态）：系统压力档信号缺失时
-                    // 回退显示接触状态（部分机型不投递 type 34 事件）。
+                    // 实时判定徽章（周期刷新超时态）：优先系统压力档信号；
+                    // 本机不投递 type 34 时按接触压力对照当前分界实时判定
+                    //（校准激活用学到的分界，否则默认 1.0）——两种按法
+                    // 的差异从此在无 stage 机型上可见。
                     TimelineView(.periodic(from: .now, by: 0.3)) { context in
                         let stage = live.effectivePressureStage(now: context.date)
-                        let hasContact = !live.touchDots.isEmpty
-                        Text(badgeText(stage, hasContact: hasContact))
+                        let maxPressure = live.touchDots.map(\.pressure).max()
+                        Text(badgeText(stage, maxPressure: maxPressure))
                             .font(.system(size: 22, weight: .bold))
-                            .foregroundColor(badgeColor(stage, hasContact: hasContact))
+                            .foregroundColor(badgeColor(stage, maxPressure: maxPressure))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .background(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(badgeColor(stage, hasContact: hasContact).opacity(0.12)))
+                                    .fill(badgeColor(stage, maxPressure: maxPressure).opacity(0.12)))
                     }
                 }
                 HStack {
@@ -201,13 +203,13 @@ struct PressureTestCalibrationView: View {
             if result.isSuccess {
                 Label("校准完成", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 14, weight: .bold)).foregroundColor(Theme.statusGreen)
-                Text("轻/重分界 \(String(format: "%.2f", result.threshold))（轻按中位 \(String(format: "%.2f", result.lightMedian)) · 重按中位 \(String(format: "%.2f", result.heavyMedian))，差异明显）。已自动开启「校准判定」，可在设置中关闭。")
+                Text("轻/重分界 \(String(format: "%.2f", result.threshold))（轻按中位 \(String(format: "%.2f", result.lightMedian)) · 重按 P90 \(String(format: "%.2f", result.heavyP90))，差异明显）。已自动开启「校准判定」，可在设置中关闭。")
                     .font(.system(size: 12)).foregroundColor(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Label("差异不明显", systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 14, weight: .bold)).foregroundColor(Theme.coral)
-                Text("本次采集未能区分轻按与重按（类间差异 \(String(format: "%.2f", result.separation))，需要 ≥ \(String(format: "%.1f", PressureCalibrationSession.Result.minimumSeparation))），已保留默认分界。可重试：重按时确保按到触觉咔哒。")
+                Text("本次采集未能区分轻按与重按（类间差异 \(String(format: "%.2f", result.separation))，需要 ≥ \(String(format: "%.1f", PressureCalibrationSession.Result.minimumSeparation))），已保留默认分界。可重试：重按时确保按到触觉咔哒，每次按住片刻再松开。")
                     .font(.system(size: 12)).foregroundColor(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -229,8 +231,11 @@ struct PressureTestCalibrationView: View {
 
     // MARK: 采样定时器
 
-    /// 采样：定时读取实时触点的接触压力交给会话（20Hz，触点发布 30Hz）；
+    /// 采样：定时读取接触压力交给会话（20Hz，触点发布 30Hz）；
     /// 无需依赖系统压力档信号——无信号时由会话按采集阶段标注。
+    /// 信号形态决定采样源：轻按是稳态接触 → 直读最新帧即可；
+    /// 重按是瞬态峰值（帧源 125Hz，短峰 < 50ms 会被点采漏掉）
+    /// → 峰值保持，取近 0.1s 接触压力环最大值，不漏峰。
     ///
     /// 必须用存储型 Timer（onAppear 启动 / onDisappear 停止），不能用
     /// body 内联 onReceive(Timer.publish)：sheet 打开期间 touchDots 被
@@ -243,7 +248,15 @@ struct PressureTestCalibrationView: View {
         let live = self.live
         let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
             Task { @MainActor in
-                model.calibrationDidReceiveTouchPressures(live.touchDots.map(\.pressure))
+                let pressures: [Double]
+                if flow == .collectingLight {
+                    pressures = live.touchDots.map(\.pressure)
+                } else if let peak = TouchpointMonitor.recentMaxContactPressure(within: 0.1) {
+                    pressures = [peak]
+                } else {
+                    pressures = []
+                }
+                model.calibrationDidReceiveTouchPressures(pressures)
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -297,7 +310,7 @@ struct PressureTestCalibrationView: View {
         // 系统压力档信号三态：从未收到 / 收到但超时中断 / 存活。
         let signalText: String
         if live.pressureStageAt == nil {
-            signalText = "压力档信号 未收到（本机不投递：校准按阶段标注，重按判定需开启校准）"
+            signalText = "压力档信号 未收到（本机不投递：判定与徽章按接触压力对照分界）"
         } else if live.effectivePressureStage() != nil {
             signalText = "压力档信号 已收到"
         } else {
@@ -310,19 +323,23 @@ struct PressureTestCalibrationView: View {
         return "\(signalText) · \(contactText)"
     }
 
-    private func badgeText(_ stage: Int?, hasContact: Bool) -> String {
+    private func badgeText(_ stage: Int?, maxPressure: Double?) -> String {
         switch stage {
         case 2: return "重按"
         case 1: return "轻按"
-        default: return hasContact ? "接触中" : "未接触"
+        default:
+            guard let pressure = maxPressure, pressure > 0 else { return "未接触" }
+            return pressure >= model.effectivePressureThreshold ? "重按" : "轻按"
         }
     }
 
-    private func badgeColor(_ stage: Int?, hasContact: Bool) -> Color {
+    private func badgeColor(_ stage: Int?, maxPressure: Double?) -> Color {
         switch stage {
         case 2: return Theme.coral
         case 1: return Theme.keyPurple
-        default: return hasContact ? Theme.secondary : Theme.tertiary
+        default:
+            guard let pressure = maxPressure, pressure > 0 else { return Theme.tertiary }
+            return pressure >= model.effectivePressureThreshold ? Theme.coral : Theme.keyPurple
         }
     }
 }
