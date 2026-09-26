@@ -125,6 +125,26 @@ private let debugTouchSamples =
 private nonisolated(unsafe) var debugSampleCount = 0
 private let debugSampleLock = NSLock()
 
+// MARK: 近窗接触压力环（校准判定 override 的数据源）
+
+/// MT 回调线程写入、主线程读取的最近接触压力样本（时间戳 + zTotal）。
+/// 仅供点击瞬间的校准判定查询（近窗最大值），不落盘、不进任何统计。
+private let pressureRingLock = NSLock()
+private nonisolated(unsafe) var pressureRing: [(at: Date, pressure: Double)] = []
+
+private func recordPressureSamples(_ contacts: [TouchSample]) {
+    guard !contacts.isEmpty else { return }
+    let now = Date()
+    pressureRingLock.lock()
+    for sample in contacts where sample.pressure > 0 {
+        pressureRing.append((now, sample.pressure))
+    }
+    if pressureRing.count > 256 {
+        pressureRing.removeFirst(pressureRing.count - 256)
+    }
+    pressureRingLock.unlock()
+}
+
 /// C 回调入口：每帧组装全量触点列表（方向翻转 + 手掌过滤）后派发。
 /// MT 内部线程高频调用；探针仅在 env 门控下启用。
 private let mtFrameCallback: MTFrameCallbackC = { _, touches, numTouches, _, _ in
@@ -173,6 +193,7 @@ private let mtFrameCallback: MTFrameCallbackC = { _, touches, numTouches, _, _ i
         ))
     }
     // 空帧也派发：消费端全量替换语义下，空帧 = 全部手指已离开。
+    recordPressureSamples(contacts)
     handler?(TouchFrame(touches: contacts))
 }
 
@@ -243,6 +264,22 @@ public final class TouchpointMonitor: @unchecked Sendable {
         return true
     }
 
+    /// 近窗（默认 0.25 秒）内接触压力的最大值（无样本返回 nil）。
+    /// 校准模式下点击重/轻判定用：点击瞬间手指仍在接触，取近窗最大
+    /// zTotal 对照校准阈值。线程安全；仅内存，不落盘。
+    public static func recentMaxContactPressure(within interval: TimeInterval = 0.25,
+                                                at now: Date = Date()) -> Double? {
+        pressureRingLock.lock(); defer { pressureRingLock.unlock() }
+        pressureRing.removeAll { now.timeIntervalSince($0.at) > interval * 4 }
+        var maxPressure: Double?
+        for entry in pressureRing where now.timeIntervalSince(entry.at) <= interval {
+            if maxPressure == nil || entry.pressure > maxPressure! {
+                maxPressure = entry.pressure
+            }
+        }
+        return maxPressure
+    }
+
     /// 停止监听并释放设备（幂等）。
     public func stop() {
         lock.lock()
@@ -259,5 +296,8 @@ public final class TouchpointMonitor: @unchecked Sendable {
             MTDeviceStop(device)
             MTDeviceRelease(device)
         }
+        pressureRingLock.lock()
+        pressureRing.removeAll()
+        pressureRingLock.unlock()
     }
 }

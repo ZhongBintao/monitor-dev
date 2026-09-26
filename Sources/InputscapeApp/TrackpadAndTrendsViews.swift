@@ -181,20 +181,20 @@ struct TrackpadOpsView: View {
 
     /// 按压强度分布卡：MTTouch 手指连续压力（按帧聚合）的 40 桶直方图
     /// （量程 0–2）+ 轻/重两档汇总 + 平均压力。
-    /// 分界经真机标定：< 1.0 轻按，≥ 1.0 重按；设备不支持 Force Touch
-    /// 时显示说明态（非 FT 触控板压力值域未知）。
+    /// 轻/重分界默认 1.0，可在设置的「按压测试与校准」中校准；
+    /// 设备不支持重按时显示说明态（非 FT 触控板压力值域未知）。
     private var pressureCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 CardHeader(title: "按压强度分布",
-                           help: "基于触控板硬件的手指连续压力（接触中按帧聚合）：按压越重、越久，右侧桶计数越高。分界经真机标定：< 1.0 轻按，≥ 1.0 重按（电容总量实测可超 1）。只保存直方图计数，不保存原始压力序列。",
+                           help: "基于触控板硬件的手指接触压力（接触中按帧聚合）：按压越重、越久，右侧桶计数越高。轻/重分界默认 1.0，可在设置的「按压测试与校准」中校准为你的设备特征。只保存直方图计数，不保存原始压力序列。",
                            trailing: AnyView(
                             Text("平均按压 \(averagePressureText)")
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundColor(Theme.secondary)
                                 .monospacedDigit()))
                 if !model.deviceProfile.supportsForceTouch {
-                    Text("当前设备不支持 Force Touch，未采集按压数据。")
+                    Text("当前设备不支持重按（Force Touch），未采集按压数据。")
                         .font(.system(size: 13)).foregroundColor(Theme.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)
@@ -291,18 +291,14 @@ struct TrackpadOpsView: View {
 
     // MARK: - 触点热力图
 
-    /// 触点热力图卡（UI 定稿）：触点位置按 24×16 网格按日聚合计数，
-    /// 面板 + 数字色阶图例 + 选中/最热读数统一居中排版。
-    /// 颜色只做方向引导：点按格子查看具体次数，附最热区域文字说明。
+    /// 触点热力图卡：触点位置按 24×16 网格按日聚合，直观展示使用分布。
+    /// 不显示具体次数（量纲是接触帧，数字无独立意义——用户拍板）：
+    /// 图例用「少 / 多」相对词，脚注用九宫格区域名 + 三档相对程度。
     private var heatmapCard: some View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
                 CardHeader(title: "触点热力图",
-                           help: "读取系统触控板多点触控数据，把触点位置按 24×16 网格按日聚合计数。只保存网格计数，不保存轨迹、原始触点流或屏幕坐标；设备不支持时无数据。色阶按当前数据实际次数线性分 7 档，图例标注各档数字区间；点按格子可查看具体次数。",
-                           trailing: AnyView(
-                            Text("触碰 \(formatCount(snapshot.touchTotal)) 次")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(Theme.secondary)))
+                           help: "读取系统触控板多点触控数据，把接触位置按 24×16 网格按日聚合。颜色越深表示该位置使用越频繁（含点击、滚动时的手指接触），用于观察使用习惯的分布，不代表精确次数。点按格子可查看区域的相对使用程度；设备不支持时无数据。")
                 if snapshot.touchTotal == 0 {
                     EmptyStateView(title: "暂无触点数据",
                                    detail: "在触控板上操作后会自动累计触点位置分布；设备不支持时无数据。")
@@ -315,8 +311,10 @@ struct TrackpadOpsView: View {
                                           boundaries: bounds,
                                           selectedCell: $selectedHeatmapCell)
                             .frame(maxWidth: 460)
-                        HeatLegendView(scale: Theme.coralScale, boundaries: bounds)
-                        TouchHeatmapFootnote(snapshot: snapshot, selectedCell: selectedHeatmapCell)
+                        HeatLegendView(scale: Theme.coralScale, boundaries: bounds, style: .relative)
+                        TouchHeatmapFootnote(snapshot: snapshot,
+                                             boundaries: bounds,
+                                             selectedCell: selectedHeatmapCell)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -326,21 +324,22 @@ struct TrackpadOpsView: View {
     }
 }
 
-// MARK: - 热力图读数脚注（不只依赖颜色，总览/触控板页共用）
+// MARK: - 热力图读数脚注（区域 + 相对程度，不显示数字；总览/触控板页共用）
 
-/// 优先显示选中格读数；未选中时显示最热区域描述。
+/// 优先显示选中区域的相对使用程度；未选中时显示最常用区域。
 struct TouchHeatmapFootnote: View {
     let snapshot: AggregateSnapshot
+    let boundaries: [Int]
     let selectedCell: TouchHeatmapPanel.Cell?
 
     var body: some View {
         if let cell = selectedCell {
             let count = snapshot.touchCount(row: cell.row, column: cell.column)
-            Text("选中格：第 \(cell.row + 1) 行 · 第 \(cell.column + 1) 列，\(formatCount(count)) 次触碰。再次点按取消。")
+            Text("选中区域：\(Self.regionName(row: cell.row, column: cell.column)) · \(Self.tierWord(count: count, boundaries: boundaries))。再次点按取消。")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Theme.navy)
         } else if let peak = snapshot.touchPeak {
-            Text("最热区域在第 \(peak.row + 1) 行 · 第 \(peak.column + 1) 列，共 \(formatCount(peak.count)) 次触碰；点按格子查看具体次数。")
+            Text("最常用区域：\(Self.regionName(row: peak.row, column: peak.column))；点按格子查看各区域的相对使用程度。")
                 .font(.system(size: 12))
                 .foregroundColor(Theme.secondary)
         } else {
@@ -348,6 +347,31 @@ struct TouchHeatmapFootnote: View {
                 .font(.system(size: 12))
                 .foregroundColor(Theme.secondary)
         }
+    }
+
+    /// 网格行列 → 九宫格区域名（三等分）。
+    static func regionName(row: Int, column: Int) -> String {
+        let horizontal = column < DailyRecord.touchGridColumns / 3 ? "左"
+            : (column < DailyRecord.touchGridColumns * 2 / 3 ? "中" : "右")
+        let vertical = row < DailyRecord.touchGridRows / 3 ? "上"
+            : (row < DailyRecord.touchGridRows * 2 / 3 ? "中" : "下")
+        switch (horizontal, vertical) {
+        case ("中", "中"): return "中央"
+        case ("中", "上"): return "上方"
+        case ("中", "下"): return "下方"
+        case ("左", "中"): return "左侧"
+        case ("右", "中"): return "右侧"
+        case (let h, let v): return "\(h)\(v)"
+        }
+    }
+
+    /// 档位 → 相对使用程度（末三档多、中间档中等、前两档少）。
+    static func tierWord(count: Int, boundaries: [Int]) -> String {
+        let bucket = HeatLegend.bucketIndex(count: count, boundaries: boundaries)
+        let steps = boundaries.count - 1
+        if bucket >= steps - 2 { return "使用较多" }
+        if bucket >= 2 { return "使用中等" }
+        return "使用较少"
     }
 }
 

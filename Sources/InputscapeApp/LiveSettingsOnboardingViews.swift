@@ -253,6 +253,7 @@ struct SettingsView: View {
     @EnvironmentObject var appearance: AppearanceManager
     @State private var confirmDeleteToday = false
     @State private var confirmDeleteAll = false
+    @State private var pressureTestVisible = false
 
     var body: some View {
         ScrollView {
@@ -260,10 +261,14 @@ struct SettingsView: View {
                 header
                 permissionCard
                 deviceCard
+                pressureCalibrationCard
                 appearanceCard
                 dataCard
             }
             .padding(20)
+        }
+        .sheet(isPresented: $pressureTestVisible) {
+            PressureTestCalibrationView()
         }
         .confirmationDialog("删除今天的数据？", isPresented: $confirmDeleteToday, titleVisibility: .visible) {
             Button("删除今天的数据", role: .destructive) { model.deleteTodayData() }
@@ -331,13 +336,55 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.radioGroup)
                 .disabled(true) // 首版固定 US ANSI；切换模板的设备识别在后续版本开放
-                Toggle("设备支持 Force Touch", isOn: Binding(
+                Toggle("设备支持重按（Force Touch）", isOn: Binding(
                     get: { model.deviceProfile.supportsForceTouch },
                     set: { model.setForceTouchSupport($0) }
                 ))
 
                 Text("触点热力图读取系统触控板多点触控数据，把触点位置按 24×16 网格按日聚合计数（不保存轨迹、原始触点流或屏幕坐标），色阶按实际次数线性分档并标注数字区间。设备不支持时无数据。首版基准为 MacBook Pro 14/16 英寸 US ANSI 键盘；ISO、JIS 与 Magic Keyboard 模板将在后续版本提供。")
                     .font(.system(size: 11)).foregroundColor(Theme.tertiary)
+            }
+        }
+    }
+
+    /// 按压测试与校准：双模式（系统默认判定 / 可选校准判定）入口。
+    private var pressureCalibrationCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                CardHeader(title: "按压测试与校准",
+                           help: "点击的重按判定默认使用系统压力档（按到系统触觉门限即为重按，无阈值，最准确）。校准以触觉反馈为依据——按到咔哒（震动）即为重按——学习你设备上轻按/重按的接触压力差异，用于「按压强度分布」的轻/重分界，并作为重按判定的替代口径。")
+                Text("点击与触控的重按判定默认跟随系统口径；可选开启校准，用你自己的按压力度特征替代。")
+                    .font(.system(size: 13)).foregroundColor(Theme.secondary)
+                HStack {
+                    Button("打开测试与校准…") { pressureTestVisible = true }
+                        .buttonStyle(.bordered)
+                        .disabled(model.status != .running)
+                    if model.status != .running {
+                        Text("需要正在观察时才能测试与校准。")
+                            .font(.system(size: 11)).foregroundColor(Theme.tertiary)
+                    }
+                    Spacer()
+                }
+                Toggle("启用校准判定", isOn: Binding(
+                    get: { model.pressureCalibration.isActive },
+                    set: { model.setUseCalibratedPressure($0) }
+                ))
+                .disabled(model.pressureCalibration.threshold == nil)
+                if let threshold = model.pressureCalibration.threshold {
+                    HStack {
+                        Text("已校准：轻/重分界 \(String(format: "%.2f", threshold))")
+                            .font(.system(size: 12)).foregroundColor(Theme.secondary)
+                            .monospacedDigit()
+                        if let date = model.pressureCalibration.calibratedAt {
+                            Text("· \(date.formatted(date: .abbreviated, time: .omitted))")
+                                .font(.system(size: 12)).foregroundColor(Theme.tertiary)
+                        }
+                        Spacer()
+                        Button("恢复默认") { model.clearPressureCalibration() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
             }
         }
     }
@@ -543,7 +590,7 @@ struct OnboardingView: View {
             }
             .pickerStyle(.radioGroup)
             .disabled(true)
-            Toggle("这台设备支持 Force Touch（触控板深按）", isOn: $forceTouch)
+            Toggle("这台设备支持重按（Force Touch，按到底有触觉咔哒）", isOn: $forceTouch)
             Spacer()
             HStack {
                 Button("上一步") { step = 1 }.buttonStyle(.bordered)

@@ -115,11 +115,28 @@ final class TrackpadEnhancementTests: XCTestCase {
         XCTAssertEqual(engine.activeSecondsToday(), 0, accuracy: 0.001)
     }
 
-    func testForceTouchClickThresholdDecoupledFromFingerTiers() {
-        // Force Touch 深按判定（点击瞬间口径）与手指压力档（连续口径）
-        // 值域不同，必须独立标定，不允许联动（用户拍板 0.9 保持不动）。
-        XCTAssertEqual(EventMonitor.forceTouchClickThreshold, 0.9)
-        XCTAssertEqual(PressureTier.heavyThreshold, 1.0)
+    /// 轻/重分界阈值参数化：默认 1.0 恰在桶 19/20 之间；
+    /// 校准阈值（如 0.87）按桶中心动态切分，历史直方图无需重写。
+    func testTierCountsRespectsCustomThreshold() {
+        var histogram = Array(repeating: 0, count: PressureTier.histogramBuckets)
+        histogram[16] = 3   // 桶中心 0.825
+        histogram[17] = 5   // 桶中心 0.875
+        histogram[25] = 2   // 桶中心 1.275
+
+        // 默认 1.0：0.825/0.875 均属轻按，1.275 属重按。
+        let defaultTiers = PressureTier.tierCounts(in: histogram)
+        XCTAssertEqual(defaultTiers.light, 8)
+        XCTAssertEqual(defaultTiers.heavy, 2)
+
+        // 校准分界 0.87：0.825 归轻，0.875/1.275 归重。
+        let calibrated = PressureTier.tierCounts(in: histogram, threshold: 0.87)
+        XCTAssertEqual(calibrated.light, 3)
+        XCTAssertEqual(calibrated.heavy, 7)
+
+        // 更低分界 0.8：三桶全部归重。
+        let aggressive = PressureTier.tierCounts(in: histogram, threshold: 0.8)
+        XCTAssertEqual(aggressive.light, 0)
+        XCTAssertEqual(aggressive.heavy, 10)
     }
 
     /// 手势收缩后保留的官方事件直计类别照常进引擎与快照。

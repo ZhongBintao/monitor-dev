@@ -79,6 +79,20 @@ public final class AggregationEngine: @unchecked Sendable {
 
     // MARK: - 手指按压强度
 
+    /// 轻/重分界阈值（默认 1.0；用户校准后为学习值，见 PressureCalibrationStore）。
+    /// 只影响展示层的轻/重切分（快照携带阈值），直方图分桶不受影响。
+    private var pressureThreshold: Double = PressureTier.heavyThreshold
+
+    public func setPressureThreshold(_ threshold: Double) {
+        lock.lock(); defer { lock.unlock() }
+        pressureThreshold = max(threshold, 0)
+    }
+
+    public func pressureThresholdValue() -> Double {
+        lock.lock(); defer { lock.unlock() }
+        return pressureThreshold
+    }
+
     /// 记一次手指按压样本（MTTouch 手指压力 0–1 连续值，接触中每帧一条）。
     /// 按帧累计即按压时长权重：直方图反映「压力 × 停留时间」分布，
     /// 无需节流（纯整数累加，125Hz×触点数开销可忽略）；
@@ -339,7 +353,8 @@ public final class AggregationEngine: @unchecked Sendable {
             hourlyByOp: hourlyKind,
             daySeries: series,
             touchGrid: touchGrid,
-            touchPressureHistogram: touchPressureHistogram
+            touchPressureHistogram: touchPressureHistogram,
+            pressureTierThreshold: pressureThreshold
         )
     }
 
@@ -490,7 +505,8 @@ public final class AggregationEngine: @unchecked Sendable {
             hourlyByOp: hourlyKind,
             daySeries: series,
             touchGrid: touchGrid,
-            touchPressureHistogram: touchPressureHistogram
+            touchPressureHistogram: touchPressureHistogram,
+            pressureTierThreshold: pressureThreshold
         )
     }
 }

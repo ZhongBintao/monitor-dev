@@ -208,19 +208,23 @@ struct OverviewView: View {
                                    detail: "在触控板上操作后会自动累计触点位置分布。")
                         .frame(height: 170)
                 } else {
+                    let bounds = HeatLegend.boundaries(maxCount: snapshot.touchGrid.max() ?? 0,
+                                                       steps: Theme.coralScale.count)
                     VStack(spacing: 8) {
                         TouchHeatmapPanel(grid: snapshot.touchGrid,
                                           boundaries: bounds,
                                           selectedCell: $selectedTouchCell)
                             .frame(maxWidth: 320)
-                        HeatLegendView(scale: Theme.coralScale, boundaries: bounds)
-                        TouchHeatmapFootnote(snapshot: snapshot, selectedCell: selectedTouchCell)
+                        HeatLegendView(scale: Theme.coralScale, boundaries: bounds, style: .relative)
+                        TouchHeatmapFootnote(snapshot: snapshot,
+                                             boundaries: bounds,
+                                             selectedCell: selectedTouchCell)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
                 }
                 if !model.deviceProfile.supportsForceTouch {
-                    Text("当前设备不支持 Force Touch。")
+                    Text("当前设备不支持重按（Force Touch）。")
                         .font(.system(size: 11)).foregroundColor(Theme.tertiary)
                 }
             }

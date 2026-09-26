@@ -38,7 +38,7 @@ public enum TrackpadOperationKind: String, CaseIterable, Codable, Sendable {
     case scrollDown     // 下滚
     case smartZoom      // 智能缩放（双指双击，官方 smartMagnify 事件直计）
     case swipe          // 三指轻扫导航（官方 swipe 事件直计；双指轻扫在系统内表现为滚动）
-    case forceTouch     // 深按（设备支持时）
+    case forceTouch     // 重按点击（系统压力档 stage 2 判定，或校准阈值判定）
     case zoom           // 历史口径：方向拆分前的缩放（含智能缩放），不再新增
 
     public var label: String {
@@ -48,7 +48,7 @@ public enum TrackpadOperationKind: String, CaseIterable, Codable, Sendable {
         case .scrollDown: return "下滚"
         case .smartZoom: return "智能缩放"
         case .swipe: return "滑动"
-        case .forceTouch: return "Force Touch"
+        case .forceTouch: return "重按点击"
         case .zoom: return "缩放（历史）"
         }
     }
@@ -75,7 +75,9 @@ public enum PressureTier: String, CaseIterable, Codable, Sendable {
     case light
     case heavy
 
-    /// 轻 → 重分界：pressure ≥ 1.0 视为重按。
+    /// 默认轻 → 重分界：pressure ≥ 1.0 视为重按（可被用户校准阈值覆盖，
+    /// 见 PressureCalibrationStore；点击的重/轻判定另有系统压力档权威口径，
+    /// 与本阈值无关）。
     public static let heavyThreshold: Double = 1.0
     /// 压力直方图桶数：40 桶 × 0.05 步进，量程 0–2（>2 钳制末桶）。
     /// 旧 20 桶（量程 0–1）数据解码/合并时零填充迁移——桶 i 压力区间不变，无损。
@@ -100,11 +102,22 @@ public enum PressureTier: String, CaseIterable, Codable, Sendable {
         pressure >= heavyThreshold ? .heavy : .light
     }
 
-    /// 直方图 → 两档汇总（桶 0–19 轻 / 20–39 重；1.0 = 桶 20 起重）。
+    /// 按给定分界分档（校准阈值用；threshold ≤ 0 时全部按轻按兜底）。
+    public static func classify(_ pressure: Double, threshold: Double) -> PressureTier {
+        pressure >= max(threshold, 0) ? .heavy : .light
+    }
+
+    /// 直方图 → 两档汇总（默认分界 1.0，即桶 0–19 轻 / 20–39 重）。
     public static func tierCounts(in histogram: [Int]) -> (light: Int, heavy: Int) {
+        tierCounts(in: histogram, threshold: heavyThreshold)
+    }
+
+    /// 直方图 → 两档汇总（按给定分界动态切桶：桶中心 < 分界为轻）。
+    /// 校准阈值任意取值时切分线不再对齐桶边界，按桶中心判定。
+    public static func tierCounts(in histogram: [Int], threshold: Double) -> (light: Int, heavy: Int) {
         var light = 0, heavy = 0
         for (index, count) in histogram.enumerated() {
-            if index < histogramBuckets / 2 { light += count } else { heavy += count }
+            if bucketCenter(index) < max(threshold, 0) { light += count } else { heavy += count }
         }
         return (light, heavy)
     }
@@ -408,6 +421,9 @@ public struct AggregateSnapshot: Sendable, Equatable {
     public var touchGrid: [Int]
     /// 手指按压强度直方图（多日合并，40 桶 × 0.05，量程 0–2）。
     public var touchPressureHistogram: [Int]
+    /// 轻/重分界阈值（系统默认 1.0，用户校准后为学习值）。
+    /// 快照携带阈值，展示层据此动态切分轻/重，无需再查配置。
+    public var pressureTierThreshold: Double
 
     public init(scope: PeriodScope, dayCount: Int, keyPresses: Int, trackpadOps: Int,
                 activeSeconds: Double, keyCounts: [String: Int],
@@ -416,7 +432,8 @@ public struct AggregateSnapshot: Sendable, Equatable {
                 buckets: [TimeBucket], hourlyByOp: [TrackpadOperationKind: [Int]],
                 daySeries: [DaySeriesPoint],
                 touchGrid: [Int] = [],
-                touchPressureHistogram: [Int] = []) {
+                touchPressureHistogram: [Int] = [],
+                pressureTierThreshold: Double = PressureTier.heavyThreshold) {
         self.scope = scope
         self.dayCount = dayCount
         self.keyPresses = keyPresses
@@ -430,6 +447,7 @@ public struct AggregateSnapshot: Sendable, Equatable {
         self.daySeries = daySeries
         self.touchGrid = touchGrid
         self.touchPressureHistogram = touchPressureHistogram
+        self.pressureTierThreshold = pressureTierThreshold
     }
 
     public static func empty(_ scope: PeriodScope) -> AggregateSnapshot {
@@ -477,9 +495,9 @@ public struct AggregateSnapshot: Sendable, Equatable {
         return weighted / Double(samples)
     }
 
-    /// 手指按压两档汇总（多日合并）。
+    /// 手指按压两档汇总（多日合并，按快照携带的阈值切分）。
     public var touchPressureTiers: (light: Int, heavy: Int) {
-        PressureTier.tierCounts(in: touchPressureHistogram)
+        PressureTier.tierCounts(in: touchPressureHistogram, threshold: pressureTierThreshold)
     }
 
     /// 热力图网格总触碰次数（多日合并）。

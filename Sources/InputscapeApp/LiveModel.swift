@@ -22,6 +22,10 @@ public final class LiveModel: ObservableObject {
     private var lastTouchFrameAt: Date = .distantPast
     @Published public private(set) var touchDots: [LiveState.TouchDot] = []
     private var touchPulseTimer: Timer?
+    /// 系统压力档（type 34 stage：1 轻按 / 2 重按）最近一次取值与时刻。
+    /// 供按压测试与校准模块实时展示；仅内存。
+    @Published public private(set) var pressureStage: Int = 0
+    @Published public private(set) var pressureStageAt: Date?
 
     private init() {}
 
@@ -119,6 +123,20 @@ public final class LiveModel: ObservableObject {
             liveTouchMap.removeAll()
         }
         touchDots = liveTouchMap.values.sorted { $0.fingerID < $1.fingerID }
+    }
+
+    // MARK: - 系统压力档（实时测试 / 校准展示）
+
+    /// 压力档事件（EventMonitor 转发，主线程）。仅记录最近取值。
+    public func notePressureStage(_ stage: Int, pressure: Double) {
+        pressureStage = stage
+        pressureStageAt = Date()
+    }
+
+    /// 当前有效压力档：超过 0.7 秒无新事件或 stage 为 0（悬停/离开）视为无接触。
+    public func effectivePressureStage(now: Date = Date()) -> Int? {
+        guard let at = pressureStageAt, now.timeIntervalSince(at) < 0.7 else { return nil }
+        return pressureStage > 0 ? pressureStage : nil
     }
 
     // MARK: - 空闲

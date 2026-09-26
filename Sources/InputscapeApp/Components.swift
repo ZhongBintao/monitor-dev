@@ -81,13 +81,18 @@ struct StatCard: View {
     }
 }
 
-// MARK: - 热力图数字色阶图例
+// MARK: - 热力图色阶图例
 
-/// 每档色块 + 实际次数区间（分档逻辑在 Kit 的 HeatLegend，渲染/图例同源）。
-/// boundaries 必须来自与渲染面板相同的一次 HeatLegend.boundaries 调用。
+/// 图例两种形态：
+/// - numeric：每档标实际次数区间（键盘分布——按键数有确切意义）；
+/// - relative：两端「少 / 多」相对词（触点热力图——计数量纲是接触帧，
+///   具体数字无独立意义，只表达分布密度，用户拍板去数字化）。
 struct HeatLegendView: View {
+    enum Style { case numeric, relative }
+
     let scale: [Color]
     let boundaries: [Int]
+    var style: Style = .numeric
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 7) {
@@ -98,12 +103,23 @@ struct HeatLegendView: View {
                         .frame(width: 20, height: 11)
                         .overlay(RoundedRectangle(cornerRadius: 2)
                             .stroke(Theme.hairline, lineWidth: 0.5))
-                    Text(HeatLegend.label(forStep: index, boundaries: boundaries))
+                    Text(label(forStep: index))
                         .font(.system(size: 10))
                         .monospacedDigit()
                         .foregroundColor(Theme.secondary)
                 }
             }
+        }
+    }
+
+    private func label(forStep step: Int) -> String {
+        switch style {
+        case .numeric:
+            return HeatLegend.label(forStep: step, boundaries: boundaries)
+        case .relative:
+            if step == 0 { return "少" }
+            if step == scale.count - 1 { return "多" }
+            return ""
         }
     }
 }
@@ -220,7 +236,7 @@ struct StateBanner: View {
         }
         if !supportsForceTouch {
             items.append(Item(icon: "hand.point.up.left",
-                              text: "当前设备不支持 Force Touch，深按不计入统计。",
+                              text: "当前设备不支持重按（Force Touch），重按点击不计入统计。",
                               color: Theme.secondary, background: Theme.background))
         }
         return items

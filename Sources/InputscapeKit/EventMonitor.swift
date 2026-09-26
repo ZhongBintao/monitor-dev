@@ -64,8 +64,12 @@ public enum PermissionCenter {
 /// - 滚动（scrollWheel）做会话化去抖（ScrollSessionAccumulator）：间隔
 ///   < 250ms 的连续事件并入同一会话，会话结束按主导方向计 1 次上/下滚，
 ///   总位移低于噪声门限的微动会话丢弃——一次滑动 = 1 次计数，不再逐事件；
-/// - 点击压力（kCGMouseEventPressure）按轻/重两档入直方图，
-///   Force Touch 深按判定阈值独立标定、禁止联动。
+/// - 点击重/轻判定走系统权威口径：NSEvent type 34（.pressure）的 stage
+///   （0 悬停 / 1 轻按 / 2 重按）——重按门限由系统按触觉反馈门限决定，
+///   无需阈值；左键按下时取时间窗内最大 stage，≥ 2 即重按点击；
+///   无压力档信号（鼠标、个别机型不投递）一律普通点击。
+///   可选校准模式由 clickForceOverride 注入（用户校准的 zTotal 阈值口径）；
+///   旧 kCGMouseEventPressure 字段多数触控板恒值无区分度，已彻底废弃。
 public final class EventMonitor: @unchecked Sendable {
 
     public struct Handlers: Sendable {
@@ -79,12 +83,16 @@ public final class EventMonitor: @unchecked Sendable {
         public var onScroll: (@Sendable (Double) -> Void)? = nil
         public var onClick: (@Sendable () -> Void)? = nil
         public var onForceTouch: (@Sendable () -> Void)? = nil
-        /// leftMouseDown 点击压力（0–1+），按轻/中/深三档入直方图。
-        public var onPressure: (@Sendable (Double) -> Void)? = nil
         /// 智能缩放（双指双击，官方 smartMagnify 事件直计）。
         public var onSmartZoom: (@Sendable () -> Void)? = nil
         /// 三指轻扫（官方 swipe 事件直计）。
         public var onSwipe: (@Sendable () -> Void)? = nil
+        /// 系统压力档事件（NSEvent type 34）：stage 0 悬停 / 1 轻按 / 2 重按，
+        /// 附 NSEvent.pressure 连续值。供实时测试与校准模块使用。
+        public var onPressureStage: (@Sendable (Int, Double) -> Void)? = nil
+        /// 点击重/轻判定的用户校准 override（校准模式开启时由 AppModel 注入，
+        /// 读 MTTouch 近窗接触压力对照校准阈值）；返回 nil = 回退系统压力档口径。
+        public var clickForceOverride: (@Sendable () -> Bool?)? = nil
 
         public init(onKey: (@Sendable (String) -> Void)? = nil,
                     onCombo: (@Sendable (String, String) -> Void)? = nil,
@@ -92,25 +100,26 @@ public final class EventMonitor: @unchecked Sendable {
                     onScroll: (@Sendable (Double) -> Void)? = nil,
                     onClick: (@Sendable () -> Void)? = nil,
                     onForceTouch: (@Sendable () -> Void)? = nil,
-                    onPressure: (@Sendable (Double) -> Void)? = nil,
                     onSmartZoom: (@Sendable () -> Void)? = nil,
-                    onSwipe: (@Sendable () -> Void)? = nil) {
+                    onSwipe: (@Sendable () -> Void)? = nil,
+                    onPressureStage: (@Sendable (Int, Double) -> Void)? = nil,
+                    clickForceOverride: (@Sendable () -> Bool?)? = nil) {
             self.onKey = onKey
             self.onCombo = onCombo
             self.onKeyUp = onKeyUp
             self.onScroll = onScroll
             self.onClick = onClick
             self.onForceTouch = onForceTouch
-            self.onPressure = onPressure
             self.onSmartZoom = onSmartZoom
             self.onSwipe = onSwipe
+            self.onPressureStage = onPressureStage
+            self.clickForceOverride = clickForceOverride
         }
     }
 
-    /// Force Touch 深按判定阈值（kCGMouseEventPressure，点击瞬间口径）。
-    /// 与手指压力分档（PressureTier，MTTouch 连续压力口径）值域不同，独立标定；
-    /// 经验值 0.9，待 INPUTSCAPE_DEBUG_EVENTS 探针真机校准。
-    public static let forceTouchClickThreshold: Double = 0.9
+    /// 点击重/轻判定的系统压力档时间窗（秒）：重按的 stage 2 事件与随后
+    /// 左键按下几乎同时投递，窗口只需覆盖投递间隔。待真机标定。
+    public static let pressureStageWindow: TimeInterval = 0.5
 
     /// 滚动会话静默间隔（秒）：连续 scrollWheel 事件间隔超过该值即开新会话。
     /// 惯性 momentum 事件间隔 < 16ms 自然并入会话尾。待真机标定。
@@ -184,6 +193,9 @@ public final class EventMonitor: @unchecked Sendable {
         minimumDisplacement: EventMonitor.scrollMinimumDisplacement)
     private var swipeGate = GestureRefractoryGate(interval: EventMonitor.gestureRefractoryInterval)
     private var smartZoomGate = GestureRefractoryGate(interval: EventMonitor.gestureRefractoryInterval)
+    /// 系统压力档跟踪（type 34 stage 流，点击重/轻判定依据）。
+    private var pressureStageTracker = PressureStageTracker(window: EventMonitor.pressureStageWindow)
+    private var lastLoggedStage = -1
 
     public private(set) var isRunning = false
 
@@ -253,6 +265,8 @@ public final class EventMonitor: @unchecked Sendable {
             minimumDisplacement: Self.scrollMinimumDisplacement)
         swipeGate = GestureRefractoryGate(interval: Self.gestureRefractoryInterval)
         smartZoomGate = GestureRefractoryGate(interval: Self.gestureRefractoryInterval)
+        pressureStageTracker.reset()
+        lastLoggedStage = -1
         isRunning = true
         return true
     }
@@ -402,19 +416,28 @@ public final class EventMonitor: @unchecked Sendable {
 
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             if type == .leftMouseDown {
-                let pressure = event.getDoubleValueField(.mouseEventPressure)
-                if Self.debugEvents {
-                    Self.debugLog("clickPressure pressure=\(pressure)")
+                // 点击重/轻判定：优先用户校准 override（校准模式开启时由
+                // AppModel 注入，读 MTTouch 近窗接触压力对照校准阈值）；
+                // 否则用系统压力档（时间窗内最大 stage ≥ 2 = 重按，OS 权威
+                // 口径无阈值）；无压力档信号（鼠标、个别机型）一律普通点击。
+                let t = Double(event.timestamp) / 1_000_000_000
+                stateLock.lock()
+                let recentStage = pressureStageTracker.maxStage(of: t)
+                stateLock.unlock()
+                let isHeavy: Bool
+                if let heavy = handlers.clickForceOverride?() {
+                    isHeavy = heavy
+                } else {
+                    isHeavy = recentStage == 2
                 }
-                // 深按判定（kCGMouseEventPressure 值域独立标定）。
-                if pressure >= Self.forceTouchClickThreshold {
+                if Self.debugEvents {
+                    Self.debugLog("clickStage recentStage=\(recentStage.map(String.init) ?? "nil") heavy=\(isHeavy)")
+                }
+                if isHeavy {
                     handlers.onForceTouch?()
                 } else {
                     handlers.onClick?()
                 }
-                // 点击瞬间压力样本（探针用途；强度分布统计已改用
-                // MTTouch 手指连续压力——该字段多数触控板不随力度变化）。
-                handlers.onPressure?(pressure)
             } else {
                 handlers.onClick?()
             }
@@ -450,6 +473,22 @@ public final class EventMonitor: @unchecked Sendable {
                     } else {
                         handlers.onKeyUp?(keyID)
                     }
+                }
+                return
+            }
+            // 系统压力档事件（type 34）：stage 0 悬停 / 1 轻按 / 2 重按。
+            // 记录进跟踪器（点击重/轻判定依据）并转发实时层（测试/校准模块）。
+            if type.rawValue == 34 {
+                if let nsEvent = NSEvent(cgEvent: event), nsEvent.type == .pressure {
+                    let t = Double(event.timestamp) / 1_000_000_000
+                    stateLock.lock()
+                    pressureStageTracker.record(stage: nsEvent.stage, at: t)
+                    stateLock.unlock()
+                    if Self.debugEvents, nsEvent.stage != lastLoggedStage {
+                        Self.debugLog("pressureStage stage=\(nsEvent.stage) pressure=\(nsEvent.pressure)")
+                        lastLoggedStage = nsEvent.stage
+                    }
+                    handlers.onPressureStage?(nsEvent.stage, Double(nsEvent.pressure))
                 }
                 return
             }

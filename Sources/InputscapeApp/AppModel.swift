@@ -59,6 +59,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var deviceProfile: DeviceProfile
     @Published public private(set) var reduceMotion = false
     @Published public private(set) var snapshot: AggregateSnapshot
+    /// 按压校准结果与双模式开关（UserDefaults 持久化）。
+    @Published public private(set) var pressureCalibration = PressureCalibrationStore()
+    /// 进行中的校准会话（测试与校准 sheet 打开期间非 nil）。
+    @Published public private(set) var activeCalibrationSession: PressureCalibrationSession?
 
     public let store: AggregateStore
     public let engine: AggregationEngine
@@ -108,6 +112,9 @@ public final class AppModel: ObservableObject {
         engine.loadToday(from: store)
         // Force Touch 开关联动引擎采集（关闭时不采压力分档、不计深按）。
         engine.setForceTouchEnabled(saved.supportsForceTouch)
+        // 按压校准：读回持久化的分界阈值与双模式开关。
+        pressureCalibration = PressureCalibrationStore.load()
+        engine.setPressureThreshold(effectivePressureThreshold)
         refresh()
         // 已确认过设备且权限齐备（应用重启场景）：立即恢复监听，
         // 否则 UI 显示"正在观察"但实际没有任何监听器在跑。
@@ -207,6 +214,12 @@ public final class AppModel: ObservableObject {
 
     private func startMonitor() {
         let engine = self.engine
+        // 校准模式（用户开启且已校准）：点击重/轻改用 MTTouch 近窗接触压力
+        // 对照校准阈值；系统默认模式不注入 override，走系统压力档权威口径。
+        let calibrationThreshold = pressureCalibration.isActive ? pressureCalibration.threshold : nil
+        let clickOverride: (@Sendable () -> Bool?)? = calibrationThreshold.map { threshold in
+            { TouchpointMonitor.recentMaxContactPressure().map { $0 >= threshold } }
+        }
         // 触控板操作通用管道：聚合 + 实时流 + 防抖落盘。
         let track: @Sendable (TrackpadOperationKind) -> Void = { kind in
             engine.ingestTrackpad(kind)
@@ -246,7 +259,7 @@ public final class AppModel: ObservableObject {
                 track(.click)
             },
             onForceTouch: {
-                // 设备不支持 Force Touch 时开关真正生效：不计数、不进实时流。
+                // 设备不支持重按时开关真正生效：不计数、不进实时流。
                 guard engine.isForceTouchEnabled() else { return }
                 track(.forceTouch)
             },
@@ -255,7 +268,14 @@ public final class AppModel: ObservableObject {
             },
             onSwipe: {
                 track(.swipe)
-            }
+            },
+            onPressureStage: { stage, pressure in
+                Task { @MainActor in
+                    LiveModel.shared.notePressureStage(stage, pressure: pressure)
+                    AppModel.shared.activeCalibrationSession?.recordStage(stage)
+                }
+            },
+            clickForceOverride: clickOverride
         )
         let monitor = EventMonitor(handlers: handlers)
         let started = monitor.start()
@@ -436,9 +456,11 @@ public final class AppModel: ObservableObject {
                     engine.ingestTouchpoint(normalizedX: sample.x, normalizedY: sample.y)
                     engine.ingestTouchPressure(sample.pressure)
                 }
-                // 实时触控板（帧全量替换缓存，30Hz 合并发布）。
+                // 实时触控板（帧全量替换缓存，30Hz 合并发布）+
+                // 校准会话采样（激活时把接触压力转发给会话）。
                 Task { @MainActor in
                     LiveModel.shared.noteTouchFrame(frame)
+                    AppModel.shared.calibrationDidReceiveTouchPressures(frame.touches.map(\.pressure))
                 }
             }
             LiveModel.shared.startTouchPulse()
@@ -446,6 +468,80 @@ public final class AppModel: ObservableObject {
             TouchpointMonitor.shared.stop()
             LiveModel.shared.stopTouchPulse()
         }
+    }
+
+    // MARK: - 按压测试与校准
+
+    /// 打开测试与校准 sheet 时创建会话并进入轻按采集阶段。
+    public func startCalibration() {
+        let session = PressureCalibrationSession()
+        session.beginLightCollection()
+        activeCalibrationSession = session
+    }
+
+    /// 校准进入重按采集阶段（UI 引导第二步）。
+    public func advanceCalibrationToHeavy() {
+        activeCalibrationSession?.beginHeavyCollection()
+    }
+
+    /// 结束采集并计算结果。成功时持久化学到的分界、自动开启校准判定，
+    /// 并重建监听（点击 override 随新阈值生效）；失败时保留默认。
+    @discardableResult
+    public func finishCalibration() -> PressureCalibrationSession.Result? {
+        guard let session = activeCalibrationSession else { return nil }
+        let result = session.compute()
+        activeCalibrationSession = nil
+        if result.isSuccess {
+            pressureCalibration.threshold = result.threshold
+            pressureCalibration.calibratedAt = Date()
+            pressureCalibration.useCalibration = true
+            pressureCalibration.save()
+            engine.setPressureThreshold(result.threshold)
+            rebuildMonitorIfRunning()
+        }
+        return result
+    }
+
+    public func cancelCalibration() {
+        activeCalibrationSession = nil
+    }
+
+    /// 双模式开关：开启后点击重/轻判定改用校准阈值口径（轻/重分档同步）。
+    public func setUseCalibratedPressure(_ enabled: Bool) {
+        pressureCalibration.useCalibration = enabled
+        pressureCalibration.save()
+        engine.setPressureThreshold(effectivePressureThreshold)
+        rebuildMonitorIfRunning()
+    }
+
+    /// 清除校准（恢复默认阈值与系统判定）。
+    public func clearPressureCalibration() {
+        pressureCalibration.clear()
+        pressureCalibration.save()
+        engine.setPressureThreshold(PressureTier.heavyThreshold)
+        rebuildMonitorIfRunning()
+    }
+
+    /// 实际生效的轻/重分界：校准激活用学习值，否则系统默认 1.0。
+    private var effectivePressureThreshold: Double {
+        pressureCalibration.isActive
+            ? (pressureCalibration.threshold ?? PressureTier.heavyThreshold)
+            : PressureTier.heavyThreshold
+    }
+
+    /// 校准会话接收触点帧的接触压力（MainActor 转发，见 updateTouchMonitor）。
+    func calibrationDidReceiveTouchPressures(_ pressures: [Double]) {
+        guard let session = activeCalibrationSession else { return }
+        for pressure in pressures {
+            session.recordContactPressure(pressure)
+        }
+    }
+
+    /// 校准/开关变化后重建监听，让点击 override 携带最新阈值。
+    private func rebuildMonitorIfRunning() {
+        guard status == .running, monitor?.isRunning == true else { return }
+        monitor?.stop()
+        startMonitor()
     }
 
     // MARK: - 数据页自动刷新
