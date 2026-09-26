@@ -27,6 +27,8 @@ struct PressureTestCalibrationView: View {
     @State private var flow: Flow = .testing
     /// 当前阶段开始时刻（采集计时用）。
     @State private var phaseStartedAt = Date()
+    /// 校准采样定时器（存储型：onAppear 启动 / onDisappear 停止）。
+    @State private var samplingTimer: Timer?
     /// 每阶段采集时长（秒）。
     private let phaseDuration: TimeInterval = 6
 
@@ -181,12 +183,11 @@ struct PressureTestCalibrationView: View {
             Text(detail).font(.system(size: 11)).foregroundColor(Theme.tertiary)
             sampleCounts
         }
-        .onAppear { phaseStartedAt = Date() }
-        // 采样：定时读取实时触点的接触压力交给会话（20Hz，触点发布 30Hz）。
-        // 无需依赖系统压力档信号——无信号时由会话按采集阶段标注。
-        .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
-            model.calibrationDidReceiveTouchPressures(live.touchDots.map(\.pressure))
+        .onAppear {
+            phaseStartedAt = Date()
+            startSampling()
         }
+        .onDisappear { stopSampling() }
     }
 
     private var sampleCounts: some View {
@@ -225,6 +226,34 @@ struct PressureTestCalibrationView: View {
     }
 
     // MARK: 动作与展示辅助
+
+    // MARK: 采样定时器
+
+    /// 采样：定时读取实时触点的接触压力交给会话（20Hz，触点发布 30Hz）；
+    /// 无需依赖系统压力档信号——无信号时由会话按采集阶段标注。
+    ///
+    /// 必须用存储型 Timer（onAppear 启动 / onDisappear 停止），不能用
+    /// body 内联 onReceive(Timer.publish)：sheet 打开期间 touchDots 被
+    /// 30Hz 发布脉冲重新赋值（空数组也触发 objectWillChange），本视图
+    /// 每秒重渲染 ~30 次，内联 publisher 每次重算都被替换重订阅，
+    /// 0.05s 定时器活不到第一次触发（最小复现实测 ticks=0，校准恒 0 帧）。
+    private func startSampling() {
+        stopSampling()
+        let model = self.model
+        let live = self.live
+        let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+            Task { @MainActor in
+                model.calibrationDidReceiveTouchPressures(live.touchDots.map(\.pressure))
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        samplingTimer = timer
+    }
+
+    private func stopSampling() {
+        samplingTimer?.invalidate()
+        samplingTimer = nil
+    }
 
     private func beginLightPhase() {
         model.startCalibration()

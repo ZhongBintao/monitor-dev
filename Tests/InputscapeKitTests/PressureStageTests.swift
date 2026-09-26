@@ -104,14 +104,34 @@ final class PressureStageTests: XCTestCase {
         for _ in 0..<40 { sparse.recordContactPressure(1.3) }
         XCTAssertFalse(sparse.compute().isSuccess, "轻按 5 帧不足")
 
-        // 悬停（stage 0）与无效值不采。
-        let hover = PressureCalibrationSession()
-        hover.beginLightCollection()
-        hover.recordStage(0)
-        hover.recordContactPressure(0.5)
-        hover.recordStage(1)
-        hover.recordContactPressure(0)
-        XCTAssertEqual(hover.lightSampleCount, 0)
+        // 无效值（pressure ≤ 0）不采；stage 0（接触中、未达重按门限）
+        // 按契约「stage < 2 轻」归轻类，不再丢弃。
+        let invalid = PressureCalibrationSession()
+        invalid.beginLightCollection()
+        invalid.recordStage(1)
+        invalid.recordContactPressure(0)
+        invalid.recordContactPressure(-0.1)
+        XCTAssertEqual(invalid.lightSampleCount, 0, "无效值不采")
+        invalid.recordStage(0)
+        invalid.recordContactPressure(0.5)
+        XCTAssertEqual(invalid.lightSampleCount, 1, "stage 0 未达重按门限 → 轻类")
+    }
+
+    /// 流式投递 stage 0 的机型（接触期间持续 stage 0/1/2 遥测）：
+    /// 轻按阶段 stage 恒 0，样本必须入轻类——此前 stage 0 被丢弃，
+    /// 轻按阶段 0 帧（实测缺陷的机型差异面）。
+    @MainActor
+    func testStageZeroSamplesCountAsLightWhenStreamAlive() async {
+        let session = PressureCalibrationSession()
+        session.beginLightCollection()
+        session.recordStage(0)   // 信号存活，接触压力未达重按门限
+        for _ in 0..<40 { session.recordContactPressure(0.42) }
+        session.beginHeavyCollection()
+        session.recordStage(2)
+        for _ in 0..<40 { session.recordContactPressure(1.42) }
+        XCTAssertEqual(session.lightSampleCount, 40, "stage 0 样本应入轻类")
+        XCTAssertEqual(session.heavySampleCount, 40)
+        XCTAssertTrue(session.compute().isSuccess)
     }
 
     // MARK: - 触点复合标识

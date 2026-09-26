@@ -129,18 +129,21 @@ public final class PressureCalibrationSession {
     }
 
     /// 接触压力样本（发布脉冲转发；标注优先级）：
-    /// - 系统压力档信号存活 → 按实时 stage 标注（权威，防用户按错阶段）；
+    /// - 系统压力档信号存活 → 按实时 stage 标注（权威，防用户按错阶段）：
+    ///   stage ≥ 2 重；stage 0/1（未达重按门限，含接触中持续投递的
+    ///   stage 0）→ 轻——契约即「stage < 2 轻 / ≥ 2 重」。此前 stage 0
+    ///   被丢弃，流式投递 stage 0 的机型上轻按阶段一个样本都收不到。
     /// - 无信号（机型不投递 type 34，currentStage 恒 0）→ 按当前采集
     ///   阶段标注（用户指令即标签）——否则所有样本都会被丢弃，
     ///   校准永远采不到数据（实测缺陷）。
-    /// 悬停与无效值不采。
+    /// 无效值（≤ 0）不采。
     public func recordContactPressure(_ pressure: Double) {
         guard phase == .collectingLight || phase == .collectingHeavy else { return }
         guard pressure > 0 else { return }
         if stageStreamAlive {
             if currentStage >= 2 {
                 heavySamples.append(pressure)
-            } else if currentStage == 1 {
+            } else {
                 lightSamples.append(pressure)
             }
         } else {
