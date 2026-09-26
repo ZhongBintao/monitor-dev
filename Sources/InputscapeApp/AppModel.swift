@@ -456,12 +456,10 @@ public final class AppModel: ObservableObject {
                     engine.ingestTouchpoint(normalizedX: sample.x, normalizedY: sample.y)
                     engine.ingestTouchPressure(sample.pressure)
                 }
-                // 实时触控板（帧全量替换缓存，30Hz 合并发布）+
-                // 校准会话采样（激活时把接触压力转发给会话）。
-                Task { @MainActor in
-                    LiveModel.shared.noteTouchFrame(frame)
-                    AppModel.shared.calibrationDidReceiveTouchPressures(frame.touches.map(\.pressure))
-                }
+                // 实时触控板：MT 线程直达「最新帧」收件箱（非隔离单例），
+                // 30Hz 发布脉冲取最新帧渲染——逐帧 Task 转发执行顺序无保证，
+                // 旧帧后到覆盖新帧会导致多指增减时画面与实际触点不一致。
+                LatestTouchFrameInbox.shared.store(frame)
             }
             LiveModel.shared.startTouchPulse()
         } else {
@@ -529,7 +527,8 @@ public final class AppModel: ObservableObject {
             : PressureTier.heavyThreshold
     }
 
-    /// 校准会话接收触点帧的接触压力（MainActor 转发，见 updateTouchMonitor）。
+    /// 校准采样（由测试与校准 sheet 的定时器驱动：把实时触点的接触压力
+    /// 交给会话；阶段标注见 PressureCalibrationSession）。
     func calibrationDidReceiveTouchPressures(_ pressures: [Double]) {
         guard let session = activeCalibrationSession else { return }
         for pressure in pressures {

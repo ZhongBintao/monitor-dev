@@ -93,17 +93,19 @@ struct PressureTestCalibrationView: View {
                         .font(.system(size: 11)).foregroundColor(Theme.tertiary)
                 }
                 HStack(spacing: 16) {
-                    // 实时判定徽章（1 秒周期刷新超时态）。
+                    // 实时判定徽章（周期刷新超时态）：系统压力档信号缺失时
+                    // 回退显示接触状态（部分机型不投递 type 34 事件）。
                     TimelineView(.periodic(from: .now, by: 0.3)) { context in
                         let stage = live.effectivePressureStage(now: context.date)
-                        Text(badgeText(stage))
+                        let hasContact = !live.touchDots.isEmpty
+                        Text(badgeText(stage, hasContact: hasContact))
                             .font(.system(size: 22, weight: .bold))
-                            .foregroundColor(badgeColor(stage))
+                            .foregroundColor(badgeColor(stage, hasContact: hasContact))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
                             .background(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(badgeColor(stage).opacity(0.12)))
+                                    .fill(badgeColor(stage, hasContact: hasContact).opacity(0.12)))
                     }
                 }
                 HStack {
@@ -180,6 +182,11 @@ struct PressureTestCalibrationView: View {
             sampleCounts
         }
         .onAppear { phaseStartedAt = Date() }
+        // 采样：定时读取实时触点的接触压力交给会话（20Hz，触点发布 30Hz）。
+        // 无需依赖系统压力档信号——无信号时由会话按采集阶段标注。
+        .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
+            model.calibrationDidReceiveTouchPressures(live.touchDots.map(\.pressure))
+        }
     }
 
     private var sampleCounts: some View {
@@ -258,27 +265,35 @@ struct PressureTestCalibrationView: View {
     }
 
     private var diagnosticText: String {
-        let stageText = live.effectivePressureStage().map { "系统压力档 \($0)" } ?? "系统压力档 —"
+        // 系统压力档信号三态：从未收到 / 收到但超时中断 / 存活。
+        let signalText: String
+        if live.pressureStageAt == nil {
+            signalText = "压力档信号 未收到（本机不投递：校准按阶段标注，重按判定需开启校准）"
+        } else if live.effectivePressureStage() != nil {
+            signalText = "压力档信号 已收到"
+        } else {
+            signalText = "压力档信号 中断"
+        }
         let pressures = live.touchDots.map(\.pressure)
         let contactText = pressures.isEmpty
             ? "接触压力 —"
             : String(format: "接触压力 %.2f", (pressures.max() ?? 0))
-        return "\(stageText) · \(contactText)（校准即学习两者的对应关系）"
+        return "\(signalText) · \(contactText)"
     }
 
-    private func badgeText(_ stage: Int?) -> String {
+    private func badgeText(_ stage: Int?, hasContact: Bool) -> String {
         switch stage {
         case 2: return "重按"
         case 1: return "轻按"
-        default: return "未接触"
+        default: return hasContact ? "接触中" : "未接触"
         }
     }
 
-    private func badgeColor(_ stage: Int?) -> Color {
+    private func badgeColor(_ stage: Int?, hasContact: Bool) -> Color {
         switch stage {
         case 2: return Theme.coral
         case 1: return Theme.keyPurple
-        default: return Theme.tertiary
+        default: return hasContact ? Theme.secondary : Theme.tertiary
         }
     }
 }

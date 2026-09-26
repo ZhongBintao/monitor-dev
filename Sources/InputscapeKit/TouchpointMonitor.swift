@@ -68,12 +68,31 @@ enum MTTouchStateC {
 /// 单个触点样本（一帧内接触中的手指，坐标已翻转为 0=上）。
 public struct TouchSample: Sendable {
     public let fingerID: Int32
+    public let handID: Int32
+    /// 复合标识 (handID, fingerID)：MTTouch 的 fingerID 是跨帧稳定的手指
+    /// 标识（calftrail 头文件 "~identity"），handID 恒为 1 但仍并入键中，
+    /// 防御未来硬件上手 ID 变化导致跨手手指撞键。
     public let x: Double           // 归一化 0–1，左→右
     public let y: Double           // 归一化 0–1，上→下（已由 MT 左下原点翻转）
     public let pressure: Double    // 电容总量 0–1（zTotal，按帧）
     public let majorAxis: Double   // 接触椭圆长轴（mm）
     public let minorAxis: Double   // 接触椭圆短轴（mm）
     public let angle: Double       // 椭圆旋转角（弧度）
+
+    /// 跨帧稳定且帧内唯一的触点标识（显示层按此键全量替换）。
+    public var touchID: Int32 { (handID << 16) | (fingerID & 0xFFFF) }
+
+    public init(fingerID: Int32, handID: Int32, x: Double, y: Double, pressure: Double,
+                majorAxis: Double, minorAxis: Double, angle: Double) {
+        self.fingerID = fingerID
+        self.handID = handID
+        self.x = x
+        self.y = y
+        self.pressure = pressure
+        self.majorAxis = majorAxis
+        self.minorAxis = minorAxis
+        self.angle = angle
+    }
 }
 
 /// 一帧内的全部有效触点（已过手掌过滤）。
@@ -184,6 +203,7 @@ private let mtFrameCallback: MTFrameCallbackC = { _, touches, numTouches, _, _ i
 
         contacts.append(TouchSample(
             fingerID: touch.fingerID,
+            handID: touch.handID,
             x: x,
             y: y,
             pressure: Double(touch.zTotal),
@@ -195,6 +215,43 @@ private let mtFrameCallback: MTFrameCallbackC = { _, touches, numTouches, _, _ i
     // 空帧也派发：消费端全量替换语义下，空帧 = 全部手指已离开。
     recordPressureSamples(contacts)
     handler?(TouchFrame(touches: contacts))
+}
+
+// MARK: - 最新帧收件箱（实时显示的帧同步）
+
+/// MT 回调线程写入、主线程发布脉冲读取的「最新帧」收件箱。
+/// 全量替换语义下只保留最新一帧——消除逐帧 Task 转发的乱序与堆积
+/// （无结构化 Task 执行顺序无保证，旧帧后到会覆盖新帧，多指增减时
+/// 画面触点数与实际不一致）。
+public final class LatestTouchFrameInbox: @unchecked Sendable {
+    /// 单例：MT 回调与显示层共享（非隔离存储，锁保护）。
+    public static let shared = LatestTouchFrameInbox()
+
+    private let lock = NSLock()
+    private var pending: (frame: TouchFrame, at: Date)?
+
+    public init() {}
+
+    /// MT 回调线程调用（125Hz，仅赋值，恒 O(1)）。
+    public func store(_ frame: TouchFrame) {
+        lock.lock()
+        pending = (frame, Date())
+        lock.unlock()
+    }
+
+    /// 主线程发布脉冲调用：取走最新帧（无新帧返回 nil）。
+    public func drain() -> (frame: TouchFrame, at: Date)? {
+        lock.lock(); defer { lock.unlock() }
+        let receipt = pending
+        pending = nil
+        return receipt
+    }
+
+    /// 丢弃未取走的帧（暂停/停止时防旧帧复活）。
+    public func clear() {
+        lock.lock(); defer { lock.unlock() }
+        pending = nil
+    }
 }
 
 // MARK: - 触点监听器

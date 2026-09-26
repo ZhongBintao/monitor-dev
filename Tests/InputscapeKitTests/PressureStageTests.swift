@@ -114,6 +114,58 @@ final class PressureStageTests: XCTestCase {
         XCTAssertEqual(hover.lightSampleCount, 0)
     }
 
+    // MARK: - 触点复合标识
+
+    /// (handID, fingerID) 复合键：帧内唯一、跨手不撞键（多指显示修复）。
+    func testTouchSampleCompositeID() {
+        let fingerA = TouchSample(fingerID: 3, handID: 1, x: 0.1, y: 0.1,
+                                  pressure: 0.5, majorAxis: 10, minorAxis: 8, angle: 0)
+        let fingerB = TouchSample(fingerID: 4, handID: 1, x: 0.5, y: 0.5,
+                                  pressure: 0.5, majorAxis: 10, minorAxis: 8, angle: 0)
+        let otherHand = TouchSample(fingerID: 3, handID: 2, x: 0.9, y: 0.9,
+                                    pressure: 0.5, majorAxis: 10, minorAxis: 8, angle: 0)
+        XCTAssertNotEqual(fingerA.touchID, fingerB.touchID, "同手不同指不得撞键")
+        XCTAssertNotEqual(fingerA.touchID, otherHand.touchID, "跨手同 ID 不得撞键")
+        XCTAssertEqual(fingerA.touchID, fingerA.touchID, "同指跨帧键稳定")
+    }
+
+    // MARK: - 校准标注回退（系统压力档信号缺失）
+
+    /// 本机不投递 type 34（全程无 stage 事件）→ 按采集阶段标注：
+    /// 轻按阶段的样本入轻类、重按阶段入重类，校准可正常完成。
+    @MainActor
+    func testPhaseFallbackLabelingWhenStageStreamMissing() async {
+        let session = PressureCalibrationSession()
+        session.beginLightCollection()
+        // 全程不调用 recordStage —— stageStreamAlive 恒 false。
+        XCTAssertFalse(session.stageStreamAlive)
+        for _ in 0..<40 { session.recordContactPressure(0.40) }
+        session.beginHeavyCollection()
+        for _ in 0..<40 { session.recordContactPressure(1.40) }
+
+        XCTAssertEqual(session.lightSampleCount, 40, "轻按阶段样本应入轻类")
+        XCTAssertEqual(session.heavySampleCount, 40, "重按阶段样本应入重类")
+        let result = session.compute()
+        XCTAssertTrue(result.isSuccess)
+        XCTAssertEqual(result.threshold, 0.9, accuracy: 1e-9)
+    }
+
+    /// stage 信号存活时按实时 stage 标注（权威），跨手/按错阶段不污染。
+    @MainActor
+    func testStageLabelingPreferredWhenStreamAlive() async {
+        let session = PressureCalibrationSession()
+        session.beginLightCollection()
+        session.recordStage(1)   // 信号存活（刚收到）
+        for _ in 0..<40 { session.recordContactPressure(0.40) }
+        session.beginHeavyCollection()
+        session.recordStage(2)
+        for _ in 0..<40 { session.recordContactPressure(1.40) }
+        XCTAssertTrue(session.stageStreamAlive)
+        XCTAssertEqual(session.lightSampleCount, 40)
+        XCTAssertEqual(session.heavySampleCount, 40)
+        XCTAssertTrue(session.compute().isSuccess)
+    }
+
     // MARK: - PressureCalibrationStore
 
     /// 持久化回环 + 清除（独立 suite，不污染宿主 defaults）。

@@ -17,7 +17,7 @@ public final class LiveModel: ObservableObject {
     @Published public private(set) var pressedKeys: Set<String> = []
     /// 每个按下键的时间戳，用于兜底清理丢失 keyUp 的残留。
     private var pressedAt: [String: Date] = [:]
-    /// 实时触控板：当前接触中的手指（帧全量替换缓存，30Hz 合并发布）。
+    /// 实时触控板：当前接触中的手指（最新帧收件箱 + 30Hz 合并发布）。
     private var liveTouchMap: [Int32: LiveState.TouchDot] = [:]
     private var lastTouchFrameAt: Date = .distantPast
     @Published public private(set) var touchDots: [LiveState.TouchDot] = []
@@ -49,6 +49,7 @@ public final class LiveModel: ObservableObject {
         pressedKeys.removeAll()
         pressedAt.removeAll()
         liveTouchMap.removeAll()
+        LatestTouchFrameInbox.shared.clear()
         touchDots = []
     }
 
@@ -78,24 +79,11 @@ public final class LiveModel: ObservableObject {
 
     // MARK: - 实时触控板（当前触点，仅内存）
 
-    /// 触点帧接收（MT 回调线程 → MainActor 转发，~125Hz）。
-    /// **帧全量替换**：以本帧触点集合覆盖缓存——本帧没有的手指即已离开，
-    /// 触点数量与物理接触严格一致，手指离开立即消失（对齐 Kyome22 OMS
-    /// Demo 的 touchDataStream 全量替换用法）。不直接触发发布——
-    /// 发布由 30Hz 脉冲统一完成，避免实时页按回报率重绘。
-    public func noteTouchFrame(_ frame: TouchFrame) {
-        var newMap: [Int32: LiveState.TouchDot] = [:]
-        for sample in frame.touches {
-            newMap[sample.fingerID] = LiveState.TouchDot(
-                fingerID: sample.fingerID,
-                x: sample.x, y: sample.y, pressure: sample.pressure,
-                majorAxis: sample.majorAxis, minorAxis: sample.minorAxis,
-                angle: sample.angle)
-        }
-        liveTouchMap = newMap
-        lastTouchFrameAt = Date()
-        lastIngestAt = Date()
-    }
+    /// 触点帧接收改走「最新帧收件箱」（LatestTouchFrameInbox.shared）：
+    /// MT 回调线程直接 store（恒 O(1)），发布脉冲 drain 最新帧渲染。
+    /// 全量替换语义下只保留最新帧——逐帧 Task 转发执行顺序无保证，
+    /// 旧帧后到会覆盖新帧，多指增减时画面触点数与实际不一致（已修缺陷）。
+    /// 供发布脉冲取帧。
 
     /// 启动 30Hz 发布脉冲（观察开始 / 触点监听运行时）。
     public func startTouchPulse() {
@@ -112,17 +100,33 @@ public final class LiveModel: ObservableObject {
         touchPulseTimer?.invalidate()
         touchPulseTimer = nil
         liveTouchMap.removeAll()
+        LatestTouchFrameInbox.shared.clear()
         lastTouchFrameAt = .distantPast
         touchDots = []
     }
 
     private func publishTouchDots() {
+        // 取最新帧重建触点表：显示严格等于最新一帧的触点集合，
+        // 触点数量与物理接触一致（多指增减最迟 33ms 内反映到画面）。
+        if let receipt = LatestTouchFrameInbox.shared.drain() {
+            lastTouchFrameAt = receipt.at
+            var newMap: [Int32: LiveState.TouchDot] = [:]
+            for sample in receipt.frame.touches {
+                newMap[sample.touchID] = LiveState.TouchDot(
+                    fingerID: sample.fingerID,
+                    touchID: sample.touchID,
+                    x: sample.x, y: sample.y, pressure: sample.pressure,
+                    majorAxis: sample.majorAxis, minorAxis: sample.minorAxis,
+                    angle: sample.angle)
+            }
+            liveTouchMap = newMap
+        }
         // 兜底：无接触时 MT 可能停止发帧（最后状态无空帧可清），
         // 超过 300ms 未收到新帧即视为全部离开，杜绝触点残留。
         if !liveTouchMap.isEmpty, Date().timeIntervalSince(lastTouchFrameAt) > 0.3 {
             liveTouchMap.removeAll()
         }
-        touchDots = liveTouchMap.values.sorted { $0.fingerID < $1.fingerID }
+        touchDots = liveTouchMap.values.sorted { $0.touchID < $1.touchID }
     }
 
     // MARK: - 系统压力档（实时测试 / 校准展示）

@@ -93,10 +93,23 @@ public final class PressureCalibrationSession {
     public private(set) var phase: Phase = .idle
     /// 实时压力档（最近一次 stage 事件），供 UI 与标注共用。
     public private(set) var currentStage: Int = 0
+    /// 最近一次 stage 事件时刻：判断系统压力档信号是否存活
+    /// （部分机型不投递 type 34 事件，此时标注回退到采集阶段）。
+    private var lastStageAt: Date?
     private var lightSamples: [Double] = []
     private var heavySamples: [Double] = []
+    /// 可注入时钟（测试用）。
+    private let now: () -> Date
 
-    public init() {}
+    public init(now: @escaping () -> Date = Date.init) {
+        self.now = now
+    }
+
+    /// 系统压力档信号是否存活（1 秒内有过 stage 事件）。
+    public var stageStreamAlive: Bool {
+        guard let last = lastStageAt else { return false }
+        return now().timeIntervalSince(last) < 1.0
+    }
 
     public func beginLightCollection() {
         phase = .collectingLight
@@ -112,17 +125,30 @@ public final class PressureCalibrationSession {
     /// 压力档事件（EventMonitor 转发；同时是实时测试的判定来源）。
     public func recordStage(_ stage: Int) {
         currentStage = stage
+        lastStageAt = now()
     }
 
-    /// 接触压力样本（TouchpointMonitor 帧转发；按实时 stage 自动标注）。
-    /// 悬停（stage 0）与无效值不采。
+    /// 接触压力样本（发布脉冲转发；标注优先级）：
+    /// - 系统压力档信号存活 → 按实时 stage 标注（权威，防用户按错阶段）；
+    /// - 无信号（机型不投递 type 34，currentStage 恒 0）→ 按当前采集
+    ///   阶段标注（用户指令即标签）——否则所有样本都会被丢弃，
+    ///   校准永远采不到数据（实测缺陷）。
+    /// 悬停与无效值不采。
     public func recordContactPressure(_ pressure: Double) {
         guard phase == .collectingLight || phase == .collectingHeavy else { return }
         guard pressure > 0 else { return }
-        if currentStage >= 2 {
-            heavySamples.append(pressure)
-        } else if currentStage == 1 {
-            lightSamples.append(pressure)
+        if stageStreamAlive {
+            if currentStage >= 2 {
+                heavySamples.append(pressure)
+            } else if currentStage == 1 {
+                lightSamples.append(pressure)
+            }
+        } else {
+            if phase == .collectingHeavy {
+                heavySamples.append(pressure)
+            } else {
+                lightSamples.append(pressure)
+            }
         }
     }
 
@@ -144,6 +170,7 @@ public final class PressureCalibrationSession {
     public func reset() {
         phase = .idle
         currentStage = 0
+        lastStageAt = nil
         lightSamples = []
         heavySamples = []
     }

@@ -352,17 +352,21 @@ public struct LiveState: Sendable, Equatable {
     /// 触点集合以「帧全量替换」同步，与物理接触严格一致。
     public struct TouchDot: Sendable, Equatable, Identifiable {
         public let fingerID: Int32
+        /// (handID, fingerID) 复合标识——帧内唯一、跨帧稳定，保证任意
+        /// 手指数量的触点在显示层不撞键。
+        public let touchID: Int32
         public let x: Double
         public let y: Double
         public let pressure: Double
         public let majorAxis: Double
         public let minorAxis: Double
         public let angle: Double
-        public var id: Int32 { fingerID }
+        public var id: Int32 { touchID }
 
-        public init(fingerID: Int32, x: Double, y: Double, pressure: Double,
+        public init(fingerID: Int32, touchID: Int32, x: Double, y: Double, pressure: Double,
                     majorAxis: Double, minorAxis: Double, angle: Double) {
             self.fingerID = fingerID
+            self.touchID = touchID
             self.x = x
             self.y = y
             self.pressure = pressure
