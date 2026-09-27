@@ -67,6 +67,8 @@ public final class AppModel: ObservableObject {
     public let store: AggregateStore
     public let engine: AggregationEngine
     private var monitor: EventMonitor?
+    /// 本 app 事件流内的 pressure 事件监听（startLocalPressureMonitor 创建）。
+    private var localPressureMonitor: Any?
     private var saveTask: Task<Void, Never>?
     private var idleSettleTimer: Timer?
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -280,8 +282,31 @@ public final class AppModel: ObservableObject {
         let monitor = EventMonitor(handlers: handlers)
         let started = monitor.start()
         self.monitor = monitor
+        startLocalPressureMonitor()
         if !started {
             status = .permissionDenied
+        }
+    }
+
+    /// 本地 pressure 事件监听（实验性，2026-09-27 调研产物）：
+    /// 官方文档确认 pressure gesture（NSEvent.stage 0/1/2）是「独立于鼠标
+    /// 事件的独立事件流」，且 gesture 从 leftMouseDown 才开始——本机
+    /// session tap 实测从未收到 type 34，但收不到不代表目标 app 自己
+    /// 收不到。用 addLocalMonitorForEvents 在本 app 事件流里试探：
+    /// 校准/实时测试的点击全部落在本 app 窗口上，若本地能收到权威
+    /// stage，则校准标注与实时徽章自动升级为系统权威口径（与 tap 的
+    /// onPressureStage 同路转发，无信号时原有回退路径不受影响）。
+    private func startLocalPressureMonitor() {
+        guard localPressureMonitor == nil else { return }
+        localPressureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.pressure]) { event in
+            guard event.type == .pressure else { return event }
+            let stage = Int(event.stage)
+            let pressure = Double(event.pressure)
+            Task { @MainActor in
+                LiveModel.shared.notePressureStage(stage, pressure: pressure)
+                AppModel.shared.activeCalibrationSession?.recordStage(stage)
+            }
+            return event
         }
     }
 
