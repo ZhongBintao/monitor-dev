@@ -1,6 +1,6 @@
 # SwiftPM 构建产物
 .build/
-# 应用包（可由 build-release.sh 重建）
+# 应用包（由 scripts/build-app.sh 重建）
 build/
 # 工作区数据
 .workbuddy/
